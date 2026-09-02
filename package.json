@@ -35,8 +35,7 @@
     "theme": "dark"
   },
   "activationEvents": [
-    "workspaceContains:**/metadata.json",
-    "onCommand:het.hello"
+    "workspaceContains:**/metadata.json"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -56,7 +55,7 @@
     "check": "tsc --noEmit",
     "lint": "eslint .",
     "test": "npm run compile && npm run compile:tests && mocha \"out/test/**/*.test.js\"",
-    "test:integration": "npm run compile:integration && node scripts/run-integration.mjs",
+    "test:integration": "npm run compile && npm run compile:integration && node scripts/run-integration.mjs",
     "package": "vsce package --no-dependencies"
   },
   "devDependencies": {

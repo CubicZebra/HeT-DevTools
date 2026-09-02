@@ -3,19 +3,11 @@
   "tasks": [
     {
       "label": "esbuild (compile)",
-      "type": "npm",
-      "script": "compile",
-      "problemMatcher": "$esbuild",
-      "group": "build",
-      "presentation": { "reveal": "silent" }
-    },
-    {
-      "label": "esbuild (watch)",
-      "type": "npm",
-      "script": "watch",
-      "isBackground": true,
-      "problemMatcher": "$esbuild-watch",
-      "group": "build",
+      "type": "shell",
+      "command": "conda activate build; npm run compile",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "group": { "kind": "build", "isDefault": true },
       "presentation": { "reveal": "silent" }
     }
   ]

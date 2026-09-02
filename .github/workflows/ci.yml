@@ -1,6 +1,6 @@
 name: CI (lint / test / package)
 
-on:
+"on":
   push:
     branches: [master, main]
   pull_request:
