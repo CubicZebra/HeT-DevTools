@@ -1,0 +1,81 @@
+/** Domain models shared across the extension. */
+
+/** A detected fcpp project root. */
+export interface FcppProject {
+  /** Absolute path of the project root (a workspace folder). */
+  root: string;
+  /** Detection level (see development-plan §1.5). */
+  level: ProjectLevel;
+  /** Parsed metadata.json, when readable. */
+  metadata?: FcppMetadata;
+  /** Reason metadata could not be read (JSON syntax etc.). */
+  metadataError?: string;
+}
+
+export type ProjectLevel = 'full' | 'partial' | 'trace';
+
+/**
+ * metadata.json content (fcpp single source of truth).
+ * Only fields the extension reads/writes are typed; unknown keys pass through.
+ */
+export interface FcppMetadata {
+  name: string;
+  target?: string;
+  version?: string;
+  team?: string;
+  license?: string;
+  description?: string;
+  authors?: string[];
+  maintainers?: string[];
+  topics?: string[];
+  cmake_version?: string;
+  build_cppstd?: string;
+  build_cstd?: string;
+  build_type?: string;
+  activate_code_coverage?: boolean;
+  is_shared?: boolean;
+  is_header?: boolean;
+  generate_modules_inplace?: boolean;
+  std_modules?: string | string[];
+  user_modules?: string;
+  dependencies?: FcppDependencyBuckets;
+  baremetal_white_list?: string[];
+  graphviz_bin?: string;
+  doc_languages?: string[];
+  doc_versions?: string[];
+  doc_doxygen_folders?: string[];
+  doc_doxygen_suffix?: string[];
+  trigger_tests?: boolean;
+  saving_tests_log?: boolean;
+  enable_python_bindings?: boolean;
+  workflow_triggers?: FcppWorkflowTriggers;
+  [key: string]: unknown;
+}
+
+/** Dependency buckets: one package belongs to exactly one bucket. */
+export interface FcppDependencyBuckets {
+  common?: Record<string, string[]>;
+  c?: Record<string, string[]>;
+  cpp?: Record<string, string[]>;
+  infra?: Record<string, string[]>;
+}
+
+export interface FcppWorkflowTriggers {
+  build?: boolean;
+  tests?: boolean;
+  release?: boolean;
+  docs?: boolean;
+  security_scan?: boolean;
+}
+
+/** Result of probing an external tool. */
+export interface ToolStatus {
+  name: string;
+  state: 'ok' | 'missing' | 'versionMismatch';
+  /** Absolute path of the found executable. */
+  foundPath?: string;
+  /** Reported version string. */
+  version?: string;
+  /** Version constraint for display (human readable). */
+  required?: string;
+}

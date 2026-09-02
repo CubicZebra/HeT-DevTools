@@ -1,0 +1,75 @@
+{
+  "name": "het-devtools",
+  "displayName": "HeT DevTools",
+  "description": "C/C++ 工程面板（面向 fcpp 模板库）：构建、测试、依赖、文档、质量门禁、发布与上板基准一键可视化。A plain-language engineering cockpit for fcpp-based C/C++ libraries.",
+  "version": "0.1.0",
+  "publisher": "het-fti",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HeT-FTI/het-devtools.git"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "cpp",
+    "c",
+    "conan",
+    "cmake",
+    "fcpp",
+    "het",
+    "library",
+    "build",
+    "test",
+    "documentation",
+    "benchmark"
+  ],
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1b1f24",
+    "theme": "dark"
+  },
+  "activationEvents": [
+    "workspaceContains:**/metadata.json",
+    "onCommand:het.hello"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "het.hello",
+        "title": "HeT DevTools: Hello (smoke test)"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "node esbuild.mjs",
+    "compile:tests": "node esbuild.mjs --tests",
+    "compile:integration": "node esbuild.mjs --integration",
+    "watch": "node esbuild.mjs --watch",
+    "check": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "npm run compile && npm run compile:tests && mocha \"out/test/**/*.test.js\"",
+    "test:integration": "npm run compile:integration && node scripts/run-integration.mjs",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.17.0",
+    "@types/vscode": "^1.95.0",
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.25.0",
+    "eslint": "^9.17.0",
+    "mocha": "^10.8.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0"
+  }
+}

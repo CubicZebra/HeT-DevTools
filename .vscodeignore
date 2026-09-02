@@ -1,0 +1,16 @@
+# vsce 打包排除清单（HeT DevTools）
+.vscode/**
+.vscode-test/**
+src/**
+out/test/**
+**/*.map
+tsconfig.json
+eslint.config.mjs
+esbuild.mjs
+.gitignore
+.git/**
+workspace/**
+**/tsconfig*.json
+**/*.ts
+**/node_modules/**
+*.vsix

@@ -1,0 +1,36 @@
+{
+  "name": "mini-fcpp",
+  "target": "auto",
+  "version": "0.1.0",
+  "team": "HeT-FTI",
+  "license": "Apache-2.0",
+  "description": "Minimal L1 fcpp fixture used by HeT DevTools integration tests (never built).",
+  "authors": ["test <test@example.com>"],
+  "cmake_version": "4.0.1",
+  "build_cppstd": "17",
+  "build_cstd": "11",
+  "build_type": "Debug",
+  "activate_code_coverage": false,
+  "is_shared": false,
+  "is_header": false,
+  "generate_modules_inplace": false,
+  "std_modules": "",
+  "user_modules": "",
+  "dependencies": {
+    "common": {},
+    "c": {},
+    "cpp": {},
+    "infra": {}
+  },
+  "graphviz_bin": "/usr/bin",
+  "doc_languages": ["en", "zh"],
+  "doc_versions": ["1.0"],
+  "trigger_tests": false,
+  "workflow_triggers": {
+    "build": true,
+    "tests": false,
+    "release": false,
+    "docs": false,
+    "security_scan": true
+  }
+}
