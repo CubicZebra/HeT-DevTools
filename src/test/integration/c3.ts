@@ -16,7 +16,7 @@ import * as assert from 'node:assert';
 import { writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
-import { run, which } from '../../utils/exec';
+import { run as execRun, which } from '../../utils/exec';
 import {
   clangFormatCheckArgs,
   clangFormatFixArgs,
@@ -64,12 +64,12 @@ export async function run(): Promise<void> {
   const probe = join(root, 'include', 'zz_fmtprobe.h');
   writeFileSync(probe, '#pragma once\nvoid zz_fmtprobe_init(void){int x=0;(void)x;}\n', 'utf8');
   try {
-    const dry = await run(fmt, [...clangFormatCheckArgs('', 'c'), probe], { cwd: root });
+    const dry = await execRun(fmt, [...clangFormatCheckArgs('', 'c'), probe], { cwd: root });
     const red = parseClangFormatOutput(`${dry.stdout}\n${dry.stderr}`);
     assert.ok(dry.code !== 0 || red.length > 0, 'misformatted file must fail the dry-run');
-    const fix = await run(fmt, [...clangFormatFixArgs('', 'c'), probe], { cwd: root });
+    const fix = await execRun(fmt, [...clangFormatFixArgs('', 'c'), probe], { cwd: root });
     assert.strictEqual(fix.code, 0, 'clang-format -i must succeed');
-    const re = await run(fmt, [...clangFormatCheckArgs('', 'c'), probe], { cwd: root });
+    const re = await execRun(fmt, [...clangFormatCheckArgs('', 'c'), probe], { cwd: root });
     const recheck = parseClangFormatOutput(`${re.stdout}\n${re.stderr}`);
     assert.strictEqual(re.code, 0, 'fixed file must pass the dry-run');
     assert.strictEqual(recheck.length, 0, 'no violations after fix');
@@ -86,11 +86,11 @@ export async function run(): Promise<void> {
   assert.ok(git, 'git must be on PATH');
   writeFileSync(join(root, 'include', 'zz_c3_demo.cpp.txt'), 'placeholder\n', 'utf8'); // not compiled: .txt
   const rel = 'include/zz_c3_demo.cpp.txt';
-  const add = await run(git, ['-C', root, 'add', '--', rel]);
+  const add = await execRun(git, ['-C', root, 'add', '--', rel]);
   assert.strictEqual(add.code, 0, 'git add must succeed');
-  const c = await run(git, ['-C', root, 'commit', '-m', message]);
+  const c = await execRun(git, ['-C', root, 'commit', '-m', message]);
   assert.strictEqual(c.code, 0, `git commit must succeed: ${c.stdout}\n${c.stderr}`);
-  const log = await run(git, ['-C', root, 'log', '--format=%s', '-n', '3']);
+  const log = await execRun(git, ['-C', root, 'log', '--format=%s', '-n', '3']);
   const headers = collectHeaders(log.stdout);
   assert.ok(headers.includes(message), 'the conforming commit must be in the log');
   const allConform = headers.every((h) => lintCommitHeader(h).ok);
