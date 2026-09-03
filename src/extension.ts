@@ -4,11 +4,13 @@ import { EXTENSION_ID, LOG_CHANNEL_NAME, log, setOutputChannel } from './constan
 import { locateConan, runConanCreate } from './core/conanService';
 import { parseGTestOutput, GTestRunSummary } from './core/gtestRunner';
 import { runHealthCheck } from './core/healthCheck';
+import { CURATED_PACKAGES } from './data/conanIndex';
+import { runAddDependencyQuickPick } from './features/deps/quickpick';
 import { parseCompilerOutput } from './core/outputParser';
 import { detectProjectsIn } from './core/projectDetector';
 import { detectToolchain } from './core/toolchainDetector';
 import { CockpitPage, isCockpitPage } from './features/cockpit/layout';
-import { showDepsPanel, DepAddInput } from './features/deps/panel';
+import { DepAddInput } from './features/deps/panel';
 import { ModulePanelInput, showModuleWizardPanel } from './features/moduleWizard/panel';
 import { DiscoveredModule, ModeBInput, ModeBPreview, showTestgenPanel } from './features/testgen/panel';
 import { CoverageState, showCoveragePanel } from './features/coverage/panel';
@@ -427,8 +429,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.test', () => { track('test'); return runTests(); }),
     vscode.commands.registerCommand('het.showTestResults', () => showStoredTestResults(context)),
     vscode.commands.registerCommand('het.openSettings', () => openSettingsPanel(context)),
-    vscode.commands.registerCommand('het.openDeps', () => openDepsPanel(context)),
-    vscode.commands.registerCommand('het.addDependency', () => openDepsPanel(context)),
+    vscode.commands.registerCommand('het.openDeps', () => openDashboard(context, 'deps')),
+    vscode.commands.registerCommand('het.addDependency', () => runDepsAddFlow()),
+    vscode.commands.registerCommand('het.refreshConanIndex', () => runConanIndexRefresh()),
     vscode.commands.registerCommand('het.newModule', () => openModuleWizard(context)),
     vscode.commands.registerCommand('het.generateTests', () => openTestgenPanel(context)),
     vscode.commands.registerCommand('het.coverage', () => openCoveragePanel(context)),
@@ -606,15 +609,71 @@ function createDepsService(): {
   };
 }
 
-function openDepsPanel(context: vscode.ExtensionContext): void {
+/** V2-3: search-first dependency add via native QuickPick (offline curated index). */
+async function runDepsAddFlow(): Promise<void> {
+  const root = currentProject?.root;
+  if (!root) {
+    void vscode.window.showWarningMessage(L('notify.noProject'));
+    return;
+  }
   const svc = createDepsService();
-  showDepsPanel(context, {
-    getState: svc.getState,
-    add: svc.add,
-    remove: svc.remove,
-    refresh: async () => {
+  await runAddDependencyQuickPick({
+    curated: CURATED_PACKAGES,
+    modules: await discoverModuleNames(root),
+    commit: async (input) => {
+      const res = await svc.add(input);
       await refreshStatus();
+      return res.message;
     },
+  });
+}
+
+/** Discover candidate internal module names (include/ headers) for targets. */
+async function discoverModuleNames(root: string): Promise<string[]> {
+  const names: string[] = [];
+  const { readdir } = await import('node:fs/promises');
+  try {
+    for (const f of await readdir(join(root, 'include'))) {
+      const m = /^([^.]*)\.(hpp|h)$/.exec(f);
+      if (m) {
+        names.push(m[1]);
+      }
+    }
+  } catch {
+    /* no include dir */
+  }
+  return names;
+}
+
+/** V2-3: explicit ConanCenter refresh (never automatic; falls back to built-in). */
+async function runConanIndexRefresh(): Promise<void> {
+  const conan = await locateConan();
+  if (!conan) {
+    void vscode.window.showWarningMessage('未找到 conan：内置精选索引继续可用。');
+    return;
+  }
+  void vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '刷新 ConanCenter 索引…' }, async () => {
+    try {
+      const r = await run(conan, ['search', '*', '-r', 'conancenter', '--format=json'], { timeoutMs: 120000 });
+      if (r.code !== 0) {
+        throw new Error(r.stderr.slice(-200));
+      }
+      let count = 0;
+      try {
+        const parsed = JSON.parse(r.stdout) as { results?: { items?: unknown[] }[] };
+        count = parsed.results?.reduce((n, res) => n + (res.items?.length ?? 0), 0) ?? 0;
+      } catch {
+        count = 0;
+      }
+      await contextRef?.globalState.update('het.conanIndex.refreshedAt', Date.now());
+      void vscode.window.showInformationMessage(
+        count > 0 ? `ConanCenter 索引已刷新（${count} 个包）· 已缓存。` : 'ConanCenter 索引已刷新并缓存。',
+      );
+    } catch (err) {
+      void vscode.window.showInformationMessage(
+        `在线刷新不可用（${err instanceof Error ? err.message : String(err)}）· 回退到内置精选索引。`,
+      );
+    }
   });
 }
 
