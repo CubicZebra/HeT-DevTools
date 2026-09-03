@@ -1,5 +1,3 @@
-import * as vscode from 'vscode';
-
 /**
  * HeT status-bar chip (GUI rework v2 — V2-1).
  *
@@ -11,6 +9,7 @@ import * as vscode from 'vscode';
  *
  * The tooltip is a markdown bullet overview with command links so a hover is
  * enough to read the whole project health and jump to actions.
+ * PURE module — no VS Code imports (unit-testable).
  */
 
 export interface ChipTest {
@@ -35,7 +34,8 @@ export interface ChipSpec {
   text: string;
   tooltip: string;
   command?: string;
-  color?: vscode.ThemeColor;
+  /** VS Code ThemeColor id, e.g. statusBarItem.errorBackground. */
+  color?: string;
 }
 
 /** command:foo?["a",1] — args array must be URI-encoded JSON. */
@@ -80,7 +80,7 @@ export function chipSpec(m: ChipModel): ChipSpec | null {
       text,
       tooltip: lines.join('\n\n'),
       command: 'het.dashboard',
-      color: m.lastBuildOk === false ? new vscode.ThemeColor('statusBarItem.errorBackground') : undefined,
+      color: m.lastBuildOk === false ? 'statusBarItem.errorBackground' : undefined,
     };
   }
 

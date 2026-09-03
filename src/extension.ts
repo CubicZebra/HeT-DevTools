@@ -70,6 +70,7 @@ let lastBenchParse: { complete: boolean; cases: [string, string][] } | null = nu
 let wizardAutoOpened = false;
 let lastHealth: { score: number; at: number } | undefined;
 let onboardingNotified = false;
+let lastChip: { text: string; tooltip: string; command?: string } | null = null;
 const isTestHost = process.argv.some((a) => a.includes('--extensionTestsPath'));
 const buildDiagnostics = vscode.languages.createDiagnosticCollection('het-build');
 
@@ -433,6 +434,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.cockpit', () => openCockpitPanel(context)),
     vscode.commands.registerCommand('het.getCockpitPage', () => getCockpitState().page),
     vscode.commands.registerCommand('het.getCockpitState', () => getCockpitState()),
+    vscode.commands.registerCommand('het.getChipState', () => lastChip),
     vscode.commands.registerCommand('het.refresh', () => refreshStatus()),
     vscode.commands.registerCommand('het.build', () => { track('build'); return buildProject(); }),
     vscode.commands.registerCommand('het.dashboard', (section?: string) => openDashboard(context, section)),
@@ -534,7 +536,8 @@ async function buildSnapshot(): Promise<DashboardSnapshot> {
   return { project: currentProject, tools, health };
 }
 
-function openDashboard(context: vscode.ExtensionContext, section?: string): void {
+function openDashboard(context: vscode.ExtensionContext, sectionArg?: unknown): void {
+  const section = Array.isArray(sectionArg) ? String(sectionArg[0] ?? '') : typeof sectionArg === 'string' ? sectionArg : '';
   const target = section && isCockpitPage(section) ? (section as CockpitPage) : undefined;
   openCockpitPanel(context, target);
 }
@@ -2539,13 +2542,15 @@ async function refreshChip(): Promise<void> {
   });
   if (!spec) {
     statusItem.hide();
+    lastChip = null;
     return;
   }
   statusItem.text = spec.text;
   statusItem.tooltip = spec.tooltip;
   statusItem.command = spec.command;
-  statusItem.backgroundColor = spec.color;
+  statusItem.backgroundColor = spec.color ? new vscode.ThemeColor(spec.color) : undefined;
   statusItem.show();
+  lastChip = { text: spec.text, tooltip: spec.tooltip, command: spec.command };
 }
 
 /** Run the full health check when stale (>60 s) and cache the score for the chip. */

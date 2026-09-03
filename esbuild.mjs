@@ -20,6 +20,7 @@ const c2 = args.includes('--c2');
 const c3 = args.includes('--c3');
 const c4 = args.includes('--c4');
 const c5 = args.includes('--c5');
+const c6 = args.includes('--c6');
 
 /** @type {import('esbuild').BuildOptions} */
 const common = {
@@ -125,6 +126,15 @@ function buildOptions() {
       ...common,
       entryPoints: [join(srcDir, 'test', 'integration', 'c5.ts')],
       outfile: join(outDir, 'test-integration', 'c5.js'),
+    });
+  }
+
+  // 9) C6 v2 check (status-bar chip + dashboard section focus + deps commands)
+  if (c6) {
+    options.push({
+      ...common,
+      entryPoints: [join(srcDir, 'test', 'integration', 'c6.ts')],
+      outfile: join(outDir, 'test-integration', 'c6.js'),
     });
   }
   return options;

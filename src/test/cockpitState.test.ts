@@ -234,6 +234,27 @@ describe('cockpit.render', () => {
     const none = renderWizardRegion(null, info, {});
     assert.strictEqual(none, '');
   });
+
+  it('renders the three-source selector on wizard step 1 (V2-4)', () => {
+    const wizInfo = { templateRepo: 'r', templateRef: 'f', modeLabel: 'm', parentDir: 'p' };
+    const w = renderWizardRegion({ step: 1 }, { ...wizInfo, hasLocal: true, localPath: 'C:/tpl' }, {});
+    assert.ok(w.includes('name="source"'));
+    assert.ok(w.includes('value="pinned"'));
+    assert.ok(w.includes('value="release"'));
+    assert.ok(w.includes('value="local"'));
+    assert.ok(w.includes('C:/tpl'));
+    const noLocal = renderWizardRegion({ step: 1 }, { ...wizInfo, hasLocal: false }, { source: 'local' });
+    assert.ok(noLocal.includes('value="local" selected'));
+    assert.ok(noLocal.includes('disabled'), 'local option should be disabled when unavailable');
+  });
+
+  it('shows the chosen source on the step-5 summary', () => {
+    const wizInfo = { templateRepo: 'r', templateRef: 'f', modeLabel: 'm', parentDir: 'p' };
+    const w = renderWizardRegion({ step: 5 }, { ...wizInfo, hasLocal: true, localPath: 'C:/tpl' }, { name: 'x', source: 'release' });
+    assert.ok(w.includes('在线最新'));
+    const local = renderWizardRegion({ step: 5 }, { ...wizInfo, hasLocal: true }, { name: 'x', source: 'local' });
+    assert.ok(local.includes('本地模板'));
+  });
 });
 
 describe('cockpit.polish (P-G5)', () => {

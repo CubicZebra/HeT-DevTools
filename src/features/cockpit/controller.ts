@@ -228,6 +228,15 @@ export function openCockpitPanel(context: vscode.ExtensionContext, focus?: Cockp
   };
   cockpitPanel.webview.html = buildCockpitHtml(cockpitState, assets, wizardInfo, wizardDraft);
 
+  // Focus the requested section immediately (doc anchors already exist via
+  // placeholders), then load every section body in the background.
+  if (focus && isCockpitPage(focus)) {
+    cockpitState = reduceCockpit(cockpitState, { type: 'navigate', page: focus });
+    void cockpitContext?.workspaceState.update(persistKey('lastPage'), focus);
+    postState(focus);
+  }
+  void loadAllSections();
+
   cockpitPanel.webview.onDidReceiveMessage((message: { type: string; page?: string; section?: string; expand?: boolean; command?: string; action?: string; data?: Record<string, string> }) => {
     if (message.type === 'cockpit:navigate' && message.page && isCockpitPage(message.page)) {
       cockpitState = reduceCockpit(cockpitState, { type: 'navigate', page: message.page });
@@ -260,14 +269,5 @@ export function openCockpitPanel(context: vscode.ExtensionContext, focus?: Cockp
     cockpitPanel = undefined;
   });
 
-  const target = cockpitState.page;
-  void (async () => {
-    await loadAllSections();
-    if (focus && isCockpitPage(focus) && focus !== target) {
-      cockpitState = reduceCockpit(cockpitState, { type: 'navigate', page: focus });
-      void cockpitContext?.workspaceState.update(persistKey('lastPage'), focus);
-      postState(focus);
-    }
-  })();
   return cockpitPanel;
 }
