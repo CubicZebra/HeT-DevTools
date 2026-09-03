@@ -149,6 +149,183 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       : null,
   }));
 
+  // P-G2: light live summaries for the remaining pages (forms migrate later).
+  const rootOf = (): string | undefined => currentProject?.root;
+  const countIn = async (dir: string, re: RegExp): Promise<number> => {
+    const root = rootOf();
+    if (!root) {
+      return 0;
+    }
+    const { readdir } = await import('node:fs/promises');
+    try {
+      return (await readdir(join(root, dir))).filter((n) => re.test(n)).length;
+    } catch {
+      return 0;
+    }
+  };
+
+  setCockpitPageProvider('deps', async () => {
+    const root = rootOf();
+    if (!root) {
+      return { rows: [] as [string, string][], actions: [{ cmd: 'het.openDeps', icon: 'package', label: '管理依赖' }], note: '未检测到项目' };
+    }
+    let ct = '';
+    try {
+      ct = await readText(join(root, 'conandata.yml'));
+    } catch {
+      /* missing */
+    }
+    const views = listDependencies(await loadMetadata(root), ct);
+    const count = new Map<string, number>();
+    for (const v of views) {
+      count.set(v.bucket, (count.get(v.bucket) ?? 0) + 1);
+    }
+    return {
+      rows: (['common', 'c', 'cpp', 'infra'] as const).map((b) => [b, `${count.get(b) ?? 0} 个`] as [string, string]),
+      actions: [{ cmd: 'het.openDeps', icon: 'package', label: '管理依赖' }],
+    };
+  });
+
+  setCockpitPageProvider('moduleTest', async () => {
+    const headers = await countIn('include', /\.(hpp|h)$/);
+    const tests = await countIn('test_package/test/unit', /\.cpp$/);
+    return {
+      rows: [
+        ['模块头文件（include/）', `${headers} 个`],
+        ['单元测试文件', `${tests} 个`],
+      ],
+      actions: [
+        { cmd: 'het.newModule', icon: 'new-file', label: '新增模块' },
+        { cmd: 'het.generateTests', icon: 'symbol-method', label: '生成测试（A/B）' },
+      ],
+    };
+  });
+
+  setCockpitPageProvider('docs', async () => {
+    const root = rootOf();
+    const [doxy, dot, sph, mk] = await Promise.all([which('doxygen'), which('dot'), which('sphinx-build'), which('make')]);
+    const artifacts = root ? (await pathExists(join(root, 'docs', 'sphinx', 'build', 'html', 'index.html')) ? '已有产物' : '未生成') : '—';
+    return {
+      rows: [
+        ['Doxygen', doxy ? '✓' : '✗'],
+        ['Graphviz', dot ? '✓' : '✗'],
+        ['Sphinx', sph ? '✓' : '✗'],
+        ['make（Sphinx 段）', mk ? '✓' : '✗'],
+        ['产物', artifacts],
+      ],
+      actions: [{ cmd: 'het.docs', icon: 'book', label: '文档中心' }],
+    };
+  });
+
+  setCockpitPageProvider('quality', async () => {
+    const [fmt, tidy, gl] = await Promise.all([which('clang-format'), which('clang-tidy'), which('gitleaks')]);
+    return {
+      rows: [
+        ['clang-format', fmt ? '✓' : '✗'],
+        ['clang-tidy', tidy ? '✓' : '✗'],
+        ['gitleaks', gl ? '✓' : '✗'],
+        ['commitlint', '内置规则 ✓'],
+      ],
+      actions: [{ cmd: 'het.quality', icon: 'shield', label: '质量与安全' }],
+    };
+  });
+
+  setCockpitPageProvider('commit', async () => {
+    const root = rootOf();
+    let branch = '—';
+    let changes = 0;
+    if (root) {
+      const git = await which('git');
+      if (git) {
+        const br = await run(git, ['-C', root, 'branch', '--show-current']).catch(() => null);
+        branch = br && br.code === 0 ? br.stdout.trim() : '—';
+        const st = await run(git, ['-C', root, 'status', '--porcelain']).catch(() => null);
+        changes = st ? parsePorcelain(st.stdout).length : 0;
+      }
+    }
+    return {
+      rows: [
+        ['当前分支', branch],
+        ['工作区变更', `${changes} 个文件`],
+      ],
+      actions: [{ cmd: 'het.commit', icon: 'git-commit', label: '提交助手' }],
+    };
+  });
+
+  setCockpitPageProvider('release', async () => {
+    const root = rootOf();
+    if (!root) {
+      return { rows: [] as [string, string][], actions: [{ cmd: 'het.release', icon: 'rocket', label: '发布中心' }], note: '未检测到项目' };
+    }
+    const meta = await loadMetadata(root);
+    const triggers: Record<string, boolean> = { ...(meta.workflow_triggers ?? {}) };
+    const changelog = await pathExists(join(root, 'CHANGELOG.md'));
+    return {
+      rows: [
+        ['release 开关', triggers.release === true ? '✓ 已开启' : '✗ 未开启'],
+        ['build_type', meta.build_type ?? '—'],
+        ['CHANGELOG.md', changelog ? '✓' : '✗（发布时自动生成）'],
+      ],
+      actions: [
+        { cmd: 'het.release', icon: 'rocket', label: '发布中心' },
+        { cmd: 'het.preflight', icon: 'checklist', label: '发布前检查' },
+      ],
+    };
+  });
+
+  setCockpitPageProvider('bench', async () => {
+    const root = rootOf();
+    let platform = '未配置';
+    if (root) {
+      try {
+        const cfg = JSON.parse(await readText(join(root, 'benchmark', 'platform', 'bench_config.json'))) as Record<string, unknown>;
+        platform = configPlatform(cfg) === 'm' ? 'Cortex-M 裸机' : configPlatform(cfg) === 'a' ? 'Cortex-A Linux' : '未知';
+      } catch {
+        platform = '未配置';
+      }
+    }
+    return {
+      rows: [['当前平台配置', platform]],
+      actions: [{ cmd: 'het.benchmark', icon: 'chip', label: '上板测试' }],
+      note: '无硬件可“只构建（--no-flash）”或粘贴模拟串口输出解析。',
+    };
+  });
+
+  setCockpitPageProvider('collab', async () => {
+    const root = rootOf();
+    const workflows = root ? await countIn('.github/workflows', /\.(yml|yaml)$/) : 0;
+    const marker = root ? (await pathExists(join(root, '.het', 'template-ref.json')) ? '✓' : '✗') : '—';
+    return {
+      rows: [
+        ['本地工作流', `${workflows} 个`],
+        ['模板标记', marker],
+      ],
+      actions: [
+        { cmd: 'het.ci', icon: 'globe', label: 'CI 状态' },
+        { cmd: 'het.audit', icon: 'report', label: '审计报告' },
+        { cmd: 'het.templateUpdate', icon: 'sync', label: '模板更新' },
+        { cmd: 'het.patent', icon: 'lightbulb', label: '专利向导' },
+      ],
+    };
+  });
+
+  setCockpitPageProvider('settings', async () => {
+    const root = rootOf();
+    if (!root) {
+      return { rows: [] as [string, string][], actions: [{ cmd: 'het.openSettings', icon: 'settings-gear', label: '项目设置' }], note: '未检测到项目' };
+    }
+    const meta = await loadMetadata(root);
+    return {
+      rows: [
+        ['name', meta.name ?? '—'],
+        ['version', meta.version ?? '—'],
+        ['build_type', meta.build_type ?? '—'],
+        ['doc_languages', (meta.doc_languages ?? []).join('、') || '—'],
+      ],
+      actions: [{ cmd: 'het.openSettings', icon: 'settings-gear', label: '项目设置（metadata.json）' }],
+    };
+  });
+
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => void refreshStatus()),
     vscode.commands.registerCommand('het.hello', () => {

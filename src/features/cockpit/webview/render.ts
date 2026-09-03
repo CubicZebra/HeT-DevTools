@@ -43,7 +43,30 @@ export interface BuildTestPayload {
   lastTest: TestSummaryPayload | null;
 }
 
-export type PagePayload = OverviewPayload | BuildTestPayload | Record<string, unknown> | undefined;
+export type PagePayload = OverviewPayload | BuildTestPayload | SummaryPayload | Record<string, unknown> | undefined;
+
+export interface SummaryAction {
+  cmd: string;
+  icon: string; // codicon suffix
+  label: string;
+}
+
+export interface SummaryPayload {
+  rows: [string, string][];
+  actions: SummaryAction[];
+  note?: string;
+}
+
+/** Text-only summary rows + primary action buttons (no icons on sub-items). */
+export function summaryContent(p: SummaryPayload): string {
+  const rows = p.rows.map(([k, v]) => `<div class="srow"><span class="sk">${esc(k)}</span><span class="sv">${esc(v)}</span></div>`).join('');
+  const actions = p.actions
+    .map((a) => `<button class="primary" data-cmd="${esc(a.cmd)}"><i class="codicon codicon-${a.icon}"></i>${esc(a.label)}</button>`)
+    .join('');
+  return `<div class="slist">${rows || '<div class="status">（暂无数据）</div>'}</div>
+    <div class="actions">${actions}</div>
+    ${p.note ? `<div class="status">${esc(p.note)}</div>` : ''}`;
+}
 
 function statusMark(ok: boolean | null | undefined): string {
   if (ok === undefined || ok === null) {
@@ -89,6 +112,9 @@ export function buildPageContentHtml(page: CockpitPage, payload: PagePayload): s
   }
   if (page === 'buildTest') {
     return `<section class="page">${head}${buildTestContent(payload as BuildTestPayload)}</section>`;
+  }
+  if (payload && typeof payload === 'object' && 'rows' in payload && 'actions' in payload) {
+    return `<section class="page">${head}${summaryContent(payload as SummaryPayload)}</section>`;
   }
   return `<section class="page">${head}<div class="placeholder">（P-G2 将在此接入「${esc(def.label)}」页面内容；本页为驾驶舱骨架占位）</div></section>`;
 }
@@ -204,6 +230,10 @@ export function buildCockpitHtml(s: CockpitState, assets: CockpitAssets): string
     font-size: 11px; font-family: var(--vscode-editor-font-family); background: var(--vscode-textCodeBlock-background,#111); }
   .warn { padding: 6px 12px; font-size: 12px; }
   .grid { display: flex; gap: 10px; margin: 8px 0; }
+  .slist { margin: 8px 0; }
+  .srow { display: flex; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--vscode-widget-border,#2b2b2b); font-size: 12px; }
+  .srow .sk { width: 130px; opacity: .75; flex-shrink: 0; }
+  .srow .sv { flex: 1; }
   .card { border: 1px solid var(--vscode-widget-border,#333); border-radius: 8px;
     padding: 10px 14px; background: var(--vscode-editorWidget-background); min-width: 160px; }
   .card .ct { font-size: 11px; opacity: .7; }

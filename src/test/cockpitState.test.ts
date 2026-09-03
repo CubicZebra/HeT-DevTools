@@ -140,4 +140,20 @@ describe('cockpit.render', () => {
     const html = buildPageContentHtml('deps', undefined);
     assert.ok(html.includes('P-G2 将在此接入「依赖」'));
   });
+
+  it('renders summary pages: text rows without icons, primary buttons with icons', () => {
+    const html = buildPageContentHtml('deps', {
+      rows: [
+        ['common', '2 个'],
+        ['cpp', '3 个'],
+      ],
+      actions: [{ cmd: 'het.openDeps', icon: 'package', label: '管理依赖' }],
+    });
+    assert.ok(html.includes('common'));
+    assert.ok(html.includes('2 个'));
+    assert.ok(html.includes('data-cmd="het.openDeps"'));
+    assert.ok(html.includes('codicon-package'));
+    // sub-rows carry no icon markup
+    assert.ok(!/codicon/.test(html.split('data-cmd="het.openDeps"')[0].split('common')[1] ?? ''));
+  });
 });
