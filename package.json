@@ -45,7 +45,9 @@
       "properties": {
         "het.conan.profiles": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "%config.conanProfiles%"
         },
@@ -164,6 +166,10 @@
       {
         "command": "het.templateUpdate",
         "title": "%cmd.templateUpdate%"
+      },
+      {
+        "command": "het.cockpit",
+        "title": "%cmd.cockpit%"
       }
     ],
     "chatParticipants": [
@@ -216,6 +222,7 @@
     "@types/mocha": "^10.0.10",
     "@types/node": "^20.17.0",
     "@types/vscode": "^1.95.0",
+    "@vscode/codicons": "^0.0.46-24",
     "@vscode/test-electron": "^2.4.1",
     "@vscode/vsce": "^3.2.1",
     "esbuild": "^0.25.0",

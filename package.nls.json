@@ -28,5 +28,6 @@
   "cmd.audit": "HeT DevTools: Generate audit report",
   "cmd.patent": "HeT DevTools: Patent wizard",
   "cmd.newProject": "HeT DevTools: New project from template",
-  "cmd.templateUpdate": "HeT DevTools: Check template updates"
+  "cmd.templateUpdate": "HeT DevTools: Check template updates",
+  "cmd.cockpit": "HeT DevTools: Cockpit"
 }

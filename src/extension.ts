@@ -18,6 +18,7 @@ import { CommitRequest, CommitState, showCommitPanel } from './features/commit/p
 import { ReleaseState, showReleasePanel } from './features/release/panel';
 import { PreflightState, PreflightItem, showPreflightPanel } from './features/preflight/panel';
 import { registerNavView } from './features/navView';
+import { openCockpitPanel, emitCockpitEvent, getCockpitState } from './features/cockpit/controller';
 import { BenchState, showBenchPanel } from './features/bench/panel';
 import { CiState, CiRunInfo, showCiPanel } from './features/ci/panel';
 import { showSettingsPanel } from './features/settings/panel';
@@ -134,6 +135,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.getActivationLine', () => activationLine),
     vscode.commands.registerCommand('het.getCurrentProject', () => currentProject?.metadata?.name ?? null),
     vscode.commands.registerCommand('het.hasProject', () => currentProject !== undefined),
+    vscode.commands.registerCommand('het.cockpit', () => openCockpitPanel(context)),
+    vscode.commands.registerCommand('het.getCockpitPage', () => getCockpitState().page),
     vscode.commands.registerCommand('het.refresh', () => refreshStatus()),
     vscode.commands.registerCommand('het.build', () => { track('build'); return buildProject(); }),
     vscode.commands.registerCommand('het.welcome', () => openWelcome(context)),
@@ -2051,6 +2054,7 @@ async function refreshStatus(): Promise<void> {
 
   if (currentProject?.metadata) {
     const m = currentProject.metadata;
+    emitCockpitEvent({ type: 'project', name: m.name ?? '' });
     statusItem.text = L('status.project', { name: m.name, version: m.version ?? '0.0.0', buildType: m.build_type ?? '' }).replace(/\s+$/, '');
     statusItem.tooltip = `HeT DevTools — ${m.name} @ ${currentProject.root}（level: ${currentProject.level}）\n单击构建`;
     statusItem.command = 'het.build';
@@ -2058,6 +2062,7 @@ async function refreshStatus(): Promise<void> {
     log(`project detected: ${m.name} (level=${currentProject.level}) @ ${currentProject.root}`);
   } else {
     currentProject = undefined;
+    emitCockpitEvent({ type: 'project', name: '' });
     statusItem.text = L('status.noProject');
     statusItem.tooltip = L('notify.noProject');
     statusItem.command = undefined;
@@ -2080,18 +2085,26 @@ async function runConanOnce(project: FcppProject): Promise<{ ok: boolean; stdout
   const profiles = [...configured, ...envProfiles];
 
   log(`[conan] ${conanExe} create . (Debug) in ${project.root}${profiles.length ? ` profiles=${profiles.join(',')}` : ''}`);
+  emitCockpitEvent({ type: 'log:start', title: `conan create . (Debug) · ${project.metadata?.name ?? project.root}` });
   const summary = await runConanCreate(
     conanExe,
     project.root,
     { buildType: 'Debug', profiles },
     {
-      onStdout: (c) => channel?.append(c),
-      onStderr: (c) => channel?.append(c),
+      onStdout: (c) => {
+        channel?.append(c);
+        emitCockpitEvent({ type: 'log:append', line: c.replace(/\s+$/u, '') });
+      },
+      onStderr: (c) => {
+        channel?.append(c);
+        emitCockpitEvent({ type: 'log:append', line: c.replace(/\s+$/u, '') });
+      },
       timeoutMs: 0,
     },
   );
   lastConanOutput = `${summary.stdout}\n${summary.stderr}`;
   channel?.appendLine('');
+  emitCockpitEvent({ type: 'log:done', ok: summary.ok });
   return { ok: summary.ok, stdout: summary.stdout, stderr: summary.stderr };
 }
 
@@ -2116,6 +2129,7 @@ async function buildProject(): Promise<void> {
   mapIssues(issues, project.root);
   log(`[build] finished ok=${result.ok} issues=${issues.length}`);
   lastBuildOk = result.ok;
+  emitCockpitEvent({ type: 'issue:summary', count: issues.length });
 
   if (result.ok) {
     void vscode.window.showInformationMessage(`构建成功 — ${project.metadata.name} (Debug)`);
@@ -2152,6 +2166,7 @@ async function executeTestRun(): Promise<{ ok: boolean; stdout: string; stderr: 
 
   lastBuildOk = result.ok;
   lastTestSummary = parseGTestOutput(fullOutput);
+  emitCockpitEvent({ type: 'issue:summary', count: issues.length });
   log(
     `[test] ok=${result.ok} gtest=${JSON.stringify({ p: lastTestSummary.passed, f: lastTestSummary.failed, s: lastTestSummary.skipped })}`,
   );
