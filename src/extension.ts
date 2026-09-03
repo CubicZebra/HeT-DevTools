@@ -17,6 +17,7 @@ import { QualityRow, QualityRunResult, showQualityPanel } from './features/quali
 import { CommitRequest, CommitState, showCommitPanel } from './features/commit/panel';
 import { ReleaseState, showReleasePanel } from './features/release/panel';
 import { PreflightState, PreflightItem, showPreflightPanel } from './features/preflight/panel';
+import { registerNavView } from './features/navView';
 import { BenchState, showBenchPanel } from './features/bench/panel';
 import { CiState, CiRunInfo, showCiPanel } from './features/ci/panel';
 import { showSettingsPanel } from './features/settings/panel';
@@ -122,6 +123,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Test Explorer: discover test_package/test/unit GTest cases, run via conan create.
   registerTestController(context, { projectRoot: () => currentProject?.root, run: executeTestRun });
 
+  // Activity-bar quick entry (left icon → cockpit shortcuts).
+  registerNavView(context);
+
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => void refreshStatus()),
     vscode.commands.registerCommand('het.hello', () => {
@@ -129,6 +133,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand('het.getActivationLine', () => activationLine),
     vscode.commands.registerCommand('het.getCurrentProject', () => currentProject?.metadata?.name ?? null),
+    vscode.commands.registerCommand('het.hasProject', () => currentProject !== undefined),
     vscode.commands.registerCommand('het.refresh', () => refreshStatus()),
     vscode.commands.registerCommand('het.build', () => { track('build'); return buildProject(); }),
     vscode.commands.registerCommand('het.welcome', () => openWelcome(context)),

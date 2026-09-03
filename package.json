@@ -35,7 +35,8 @@
     "theme": "dark"
   },
   "activationEvents": [
-    "workspaceContains:**/metadata.json"
+    "workspaceContains:**/metadata.json",
+    "onView:het.quick"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -172,7 +173,27 @@
         "description": "HeT DevTools intent router: natural language → matching HeT GUI action",
         "isSticky": true
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "het-nav",
+          "title": "HeT DevTools",
+          "icon": "media/icon.png"
+        }
+      ]
+    },
+    "views": {
+      "het-nav": [
+        {
+          "type": "webview",
+          "id": "het.quick",
+          "name": "HeT DevTools",
+          "icon": "media/icon.png",
+          "contextualTitle": "HeT DevTools"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
