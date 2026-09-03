@@ -13,6 +13,7 @@ import { ModulePanelInput, showModuleWizardPanel } from './features/moduleWizard
 import { DiscoveredModule, ModeBInput, ModeBPreview, showTestgenPanel } from './features/testgen/panel';
 import { CoverageState, showCoveragePanel } from './features/coverage/panel';
 import { DocsState, DocToolStatus, showDocsPanel } from './features/docs/panel';
+import { QualityRow, QualityRunResult, showQualityPanel } from './features/quality/panel';
 import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
 import { DashboardSnapshot } from './features/ui';
@@ -26,7 +27,8 @@ import {
 import { planModuleFiles } from './core/moduleTemplate';
 import { planModuleTests, scanHeader } from './core/testgen';
 import { parseBlueprint, renderContractTest, renderImplementationPlan } from './core/testgenModeB';
-import { applyMetadataPatch, loadMetadata } from './core/metadataService';
+import { applyMetadataPatch, loadMetadata, validateMetadata, hasErrors } from './core/metadataService';
+import { formatConfigForFile, parseClangFormatOutput, parseClangTidyOutput, lintCommitHeader, collectHeaders, QualityIssue } from './core/qualityGates';
 import { pathExists, readText, writeJson, writeText } from './utils/fs';
 import { run, which } from './utils/exec';
 import { docsOptions, graphvizMismatch } from './core/docsService';
@@ -86,6 +88,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.generateTests', () => openTestgenPanel(context)),
     vscode.commands.registerCommand('het.coverage', () => openCoveragePanel(context)),
     vscode.commands.registerCommand('het.docs', () => openDocsPanel(context)),
+    vscode.commands.registerCommand('het.quality', () => openQualityPanel(context)),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
@@ -625,6 +628,277 @@ function openDocsPanel(context: vscode.ExtensionContext): void {
   };
 
   showDocsPanel(context, { getState, runDocs, fixGraphviz, openArtifact });
+}
+
+/** Quality & security panel (G-11): native gates, degraded gracefully. */
+function openQualityPanel(context: vscode.ExtensionContext): void {
+  const listSourceFiles = async (root: string): Promise<{ rel: string; abs: string; family: 'c' | 'cpp' }[]> => {
+    const { readdir } = await import('node:fs/promises');
+    const out: { rel: string; abs: string; family: 'c' | 'cpp' }[] = [];
+    for (const sub of ['include', 'src']) {
+      const dir = join(root, sub);
+      let names: string[] = [];
+      try {
+        names = await readdir(dir);
+      } catch {
+        continue;
+      }
+      for (const n of names) {
+        const fam = formatConfigForFile(`${sub}/${n}`);
+        if (fam) {
+          out.push({ rel: `${sub}/${n}`, abs: join(dir, n), family: fam });
+        }
+      }
+    }
+    return out;
+  };
+
+  const gateRows = async (): Promise<QualityRow[]> => {
+    const [fmt, tidy, gitLeaks, docker] = await Promise.all([
+      which('clang-format'),
+      which('clang-tidy'),
+      which('gitleaks'),
+      which('docker'),
+    ]);
+    return [
+      {
+        id: 'format',
+        label: '格式检查 (clang-format)',
+        tool: fmt ? 'clang-format · 双配置 C/C++' : 'clang-format 未安装',
+        status: fmt ? 'idle' : 'na',
+        detail: fmt ? undefined : '安装：pip install clang-format（本地绿=CI 绿，warning 即失败）',
+      },
+      {
+        id: 'tidy',
+        label: '静态检查 (clang-tidy)',
+        tool: tidy ? 'clang-tidy · WarningsAsErrors' : 'clang-tidy 未安装',
+        status: tidy ? 'idle' : 'na',
+        detail: tidy ? undefined : '本机未安装 clang-tidy（CI 原生门禁），可经 LLVM/conda 安装后本地自检。',
+      },
+      {
+        id: 'schema',
+        label: '配置校验 (schema)',
+        tool: 'metadata.json',
+        status: 'idle',
+      },
+      {
+        id: 'commitlint',
+        label: '提交信息规范 (commitlint)',
+        tool: '最近 10 次提交',
+        status: 'idle',
+      },
+      {
+        id: 'gitleaks',
+        label: '密钥扫描 (gitleaks)',
+        tool: gitLeaks ? 'gitleaks' : 'gitleaks 未安装',
+        status: gitLeaks ? 'idle' : 'na',
+        detail: gitLeaks ? undefined : 'CI 原生门禁（.github/misc/.gitleaks.toml）；本地安装 gitleaks 后可用。',
+      },
+      {
+        id: 'megalinter',
+        label: '深度扫描 (MegaLinter / SAST, advisory)',
+        tool: docker ? 'Docker 可用' : '需要 Docker',
+        status: docker ? 'idle' : 'na',
+        detail: docker ? undefined : 'MegaLinter 为 advisory（semgrep/checkov/devskim）。安装 Docker 后通过 run-megalinter.sh 运行。',
+      },
+    ];
+  };
+
+  const runRow = async (rowId: string): Promise<QualityRunResult> => {
+    const root = currentProject?.root;
+    const err = (summary: string, errors: string[]): QualityRunResult => ({
+      rowId,
+      status: 'fail',
+      summary,
+      issues: [],
+      errors,
+    });
+    const na = (summary: string, errors: string[]): QualityRunResult => ({ rowId, status: 'na', summary, issues: [], errors });
+    if (!root) {
+      return err('未检测到 fcpp 项目', []);
+    }
+    if (rowId === 'format') {
+      const tool = await which('clang-format');
+      if (!tool) {
+        return na('格式检查不可用', ['缺少 clang-format：pip install clang-format']);
+      }
+      const files = await listSourceFiles(root);
+      if (files.length === 0) {
+        return { rowId, status: 'pass', summary: '无 include/src 源文件', issues: [], errors: [] };
+      }
+      const issues: QualityIssue[] = [];
+      const errors: string[] = [];
+      const toRel = (p: string): string => (p.startsWith(root) ? p.slice(root.length).replace(/^[\\/]+/, '') : p);
+      for (const family of ['c', 'cpp'] as const) {
+        const famFiles = files.filter((f) => f.family === family);
+        if (famFiles.length === 0) {
+          continue;
+        }
+        const cfg = join(root, `.github/misc/.clang-format-${family}`);
+        if (!(await pathExists(cfg))) {
+          errors.push(`缺少配置文件 .github/misc/.clang-format-${family}（从 fcpp 模板同步）。`);
+          continue;
+        }
+        const res = await run(tool, ['--dry-run', '--Werror', `--style=file:${cfg}`, ...famFiles.map((f) => f.abs)], { cwd: root });
+        issues.push(
+          ...parseClangFormatOutput(`${res.stdout}\n${res.stderr}`).map((i) => ({ ...i, file: toRel(i.file) })),
+        );
+      }
+      if (errors.length > 0) {
+        return err('格式检查未能完整运行', errors);
+      }
+      if (issues.length > 0) {
+        return { rowId, status: 'fail', summary: `格式检查失败：${issues.length} 个文件不符合格式`, issues, errors: [] };
+      }
+      return { rowId, status: 'pass', summary: '格式检查通过（所有 C/C++ 文件已 clang-formatted）', issues: [], errors: [] };
+    }
+    if (rowId === 'tidy') {
+      const tool = await which('clang-tidy');
+      if (!tool) {
+        return na('静态检查不可用', ['缺少 clang-tidy']);
+      }
+      const cfg = join(root, '.github/misc/.clang-tidy');
+      if (!(await pathExists(cfg))) {
+        return na('静态检查不可用', ['缺少 .github/misc/.clang-tidy 配置文件']);
+      }
+      const files = (await listSourceFiles(root)).filter((f) => f.family === 'cpp').map((f) => f.abs);
+      if (files.length === 0) {
+        return { rowId, status: 'pass', summary: '无 C++ 源文件', issues: [], errors: [] };
+      }
+      const res = await run(tool, [`--config-file=${join(root, '.github/misc/.clang-tidy')}`, ...files, '--', '-std=c++17', '-Iinclude'], {
+        cwd: root,
+        timeoutMs: 0,
+      });
+      const issues = parseClangTidyOutput(`${res.stdout}\n${res.stderr}`);
+      if (issues.length > 0 || res.code !== 0) {
+        return { rowId, status: 'fail', summary: `静态检查失败：${issues.length} 条诊断（WarningsAsErrors）`, issues, errors: [] };
+      }
+      return { rowId, status: 'pass', summary: '静态检查通过', issues: [], errors: [] };
+    }
+    if (rowId === 'schema') {
+      let meta;
+      try {
+        meta = await loadMetadata(root);
+      } catch (e) {
+        return err('metadata.json 读取失败', [e instanceof Error ? e.message : String(e)]);
+      }
+      const issues = validateMetadata(meta);
+      if (hasErrors(issues)) {
+        return {
+          rowId,
+          status: 'fail',
+          summary: `配置校验失败：${issues.filter((i) => i.severity === 'error').length} 个错误`,
+          issues: [],
+          errors: issues.map((i) => `${i.field}: ${i.message}`),
+        };
+      }
+      return { rowId, status: 'pass', summary: '配置校验通过（metadata.json 合规）', issues: [], errors: [] };
+    }
+    if (rowId === 'commitlint') {
+      const git = await which('git');
+      if (!git) {
+        return na('提交规范检查不可用', ['缺少 git']);
+      }
+      const res = await run(git, ['-C', root, 'log', '--format=%s', '-n', '10']);
+      const errors: string[] = [];
+      for (const h of collectHeaders(res.stdout)) {
+        const r = lintCommitHeader(h);
+        if (!r.ok) {
+          errors.push(`${h}\n    → ${r.errors.join('；')}`);
+        }
+      }
+      if (errors.length > 0) {
+        return { rowId, status: 'fail', summary: `commitlint：最近 10 次提交中 ${errors.length} 条不合规`, issues: [], errors };
+      }
+      return { rowId, status: 'pass', summary: 'commitlint：最近 10 次提交全部合规', issues: [], errors: [] };
+    }
+    if (rowId === 'gitleaks') {
+      const tool = await which('gitleaks');
+      if (!tool) {
+        return na('密钥扫描不可用', ['缺少 gitleaks（CI 原生门禁）。本地可选安装后启用。']);
+      }
+      const cfg = join(root, '.github/misc/.gitleaks.toml');
+      const res = await run(tool, ['detect', '--source', root, '--config', cfg, '--no-banner', '--redact'], { cwd: root, timeoutMs: 0 });
+      if (res.code === 0) {
+        return { rowId, status: 'pass', summary: '密钥扫描通过（未发现泄露）', issues: [], errors: [] };
+      }
+      return { rowId, status: 'fail', summary: '密钥扫描发现潜在泄露', issues: [], errors: [`${res.stdout}\n${res.stderr}`.slice(-2000)] };
+    }
+    if (rowId === 'megalinter') {
+      const docker = await which('docker');
+      if (!docker) {
+        return na('MegaLinter 不可用', ['需要 Docker（advisory SAST）。安装 Docker 后本项自动启用。']);
+      }
+      const script = join(root, '.github/misc/run-megalinter.sh');
+      if (!(await pathExists(script))) {
+        return na('MegaLinter 不可用', ['缺少 .github/misc/run-megalinter.sh（从 fcpp 模板同步）。']);
+      }
+      const res = await run('bash', [script], { cwd: root, timeoutMs: 0 });
+      const out = `${res.stdout}\n${res.stderr}`;
+      if (res.code === 0) {
+        return { rowId, status: 'pass', summary: 'MegaLinter SAST 通过（advisory）', issues: [], errors: [] };
+      }
+      return { rowId, status: 'fail', summary: 'MegaLinter 报告问题（advisory，可先查看报告目录）', issues: [], errors: [out.slice(-2000)] };
+    }
+    return err('未知检查项', []);
+  };
+
+  const fixFormat = async () => {
+    const root = currentProject?.root;
+    if (!root) {
+      return { ok: false, message: '未检测到 fcpp 项目。' };
+    }
+    const tool = await which('clang-format');
+    if (!tool) {
+      return { ok: false, message: '缺少 clang-format：pip install clang-format' };
+    }
+    const files = await listSourceFiles(root);
+    if (files.length === 0) {
+      return { ok: false, message: '无 include/src 源文件' };
+    }
+    const choice = await vscode.window.showWarningMessage(
+      `对 ${files.length} 个 C/C++ 文件执行 clang-format -i？（include/ 与 src/ 下全部）`,
+      { modal: true },
+      '修复',
+      '取消',
+    );
+    if (choice !== '修复') {
+      return { ok: false, message: '已取消' };
+    }
+    let fixed = 0;
+    for (const family of ['c', 'cpp'] as const) {
+      const famFiles = files.filter((f) => f.family === family).map((f) => f.abs);
+      if (famFiles.length === 0) {
+        continue;
+      }
+      const cfg = join(root, `.github/misc/.clang-format-${family}`);
+      if (!(await pathExists(cfg))) {
+        continue;
+      }
+      const res = await run(tool, ['-i', `--style=file:${cfg}`, ...famFiles], { cwd: root });
+      if (res.code === 0) {
+        fixed += famFiles.length;
+      }
+    }
+    return { ok: true, message: fixed > 0 ? `已格式化 ${fixed} 个文件。` : '没有可修复的文件（配置缺失）。' };
+  };
+
+  showQualityPanel(context, {
+    getRows: gateRows,
+    runRow,
+    fixFormat,
+    openIssue: async (file, line) => {
+      const root = currentProject?.root;
+      if (!root) {
+        return;
+      }
+      const abs = (await pathExists(join(root, file))) ? join(root, file) : file;
+      void vscode.window.showTextDocument(vscode.Uri.file(abs), {
+        selection: line ? new vscode.Range(line - 1, 0, line - 1, 0) : undefined,
+        preview: true,
+      });
+    },
+  });
 }
 
 /** Settings editor (G-17): preview + confirm + backup write of metadata.json. */
