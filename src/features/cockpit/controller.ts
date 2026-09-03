@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { initialCockpitState, reduceCockpit, CockpitEvent, CockpitState } from './state';
-import { isCockpitPage } from './layout';
-import { buildCockpitHtml, renderCockpitRegions } from './webview/render';
+import { isCockpitPage, CockpitPage } from './layout';
+import { buildCockpitHtml, buildPageContentHtml, renderCockpitRegions, PagePayload } from './webview/render';
 
 /**
  * Cockpit controller (gui-rework-plan §7).
@@ -13,15 +13,44 @@ import { buildCockpitHtml, renderCockpitRegions } from './webview/render';
 let cockpitPanel: vscode.WebviewPanel | undefined;
 let cockpitState: CockpitState = initialCockpitState();
 
+/** Page → payload provider (P-G2 adapters; registered by the extension host). */
+const pageProviders = new Map<CockpitPage, () => Promise<PagePayload>>();
+/** Cached rendered main-region HTML per page. */
+const pageHtmlCache = new Map<CockpitPage, string>();
+
 export function getCockpitState(): CockpitState {
   return cockpitState;
+}
+
+/** Register a page data provider (host adapters feed cockpit pages). */
+export function setCockpitPageProvider(page: CockpitPage, provider: () => Promise<PagePayload>): void {
+  pageProviders.set(page, provider);
 }
 
 function postState(): void {
   if (!cockpitPanel) {
     return;
   }
-  void cockpitPanel.webview.postMessage({ type: 'cockpit:state', regions: renderCockpitRegions(cockpitState) });
+  const regions = renderCockpitRegions(cockpitState);
+  const cachedMain = pageHtmlCache.get(cockpitState.page);
+  void cockpitPanel.webview.postMessage({
+    type: 'cockpit:state',
+    regions: { top: regions.top, rail: regions.rail, drawer: regions.drawer, main: cachedMain ?? regions.main },
+  });
+}
+
+async function loadPage(page: CockpitPage): Promise<void> {
+  const provider = pageProviders.get(page);
+  if (!provider) {
+    return;
+  }
+  try {
+    const payload = await provider();
+    pageHtmlCache.set(page, buildPageContentHtml(page, payload));
+  } catch {
+    pageHtmlCache.delete(page);
+  }
+  postState();
 }
 
 /** Feed a host-side event into the cockpit (no-op when the cockpit is closed). */
@@ -52,6 +81,7 @@ export function openCockpitPanel(context: vscode.ExtensionContext): vscode.Webvi
     if (message.type === 'cockpit:navigate' && message.page && isCockpitPage(message.page)) {
       cockpitState = reduceCockpit(cockpitState, { type: 'navigate', page: message.page });
       postState();
+      void loadPage(message.page);
     } else if (message.type === 'drawer:toggle') {
       cockpitState = reduceCockpit(cockpitState, { type: 'drawer:toggle', expand: message.expand === true });
       postState();
@@ -63,5 +93,7 @@ export function openCockpitPanel(context: vscode.ExtensionContext): vscode.Webvi
   cockpitPanel.onDidDispose(() => {
     cockpitPanel = undefined;
   });
+
+  void loadPage(cockpitState.page);
   return cockpitPanel;
 }

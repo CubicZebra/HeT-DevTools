@@ -18,7 +18,7 @@ import { CommitRequest, CommitState, showCommitPanel } from './features/commit/p
 import { ReleaseState, showReleasePanel } from './features/release/panel';
 import { PreflightState, PreflightItem, showPreflightPanel } from './features/preflight/panel';
 import { registerNavView } from './features/navView';
-import { openCockpitPanel, emitCockpitEvent, getCockpitState } from './features/cockpit/controller';
+import { openCockpitPanel, emitCockpitEvent, getCockpitState, setCockpitPageProvider } from './features/cockpit/controller';
 import { BenchState, showBenchPanel } from './features/bench/panel';
 import { CiState, CiRunInfo, showCiPanel } from './features/ci/panel';
 import { showSettingsPanel } from './features/settings/panel';
@@ -126,6 +126,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Activity-bar quick entry (left icon → cockpit shortcuts).
   registerNavView(context);
+
+  // P-G2: feed cockpit pages with live host data (overview / build-test first).
+  setCockpitPageProvider('overview', async () => {
+    const snap = await buildSnapshot();
+    return {
+      projectName: currentProject?.metadata?.name,
+      version: currentProject?.metadata?.version,
+      buildType: currentProject?.metadata?.build_type,
+      healthScore: snap.health?.score,
+      tools: Object.entries(snap.tools).map(([name, t]) => ({ name, ok: t.state === 'ok' })),
+      lastBuildOk: lastBuildOk ?? null,
+      lastTest: lastTestSummary
+        ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped }
+        : null,
+    };
+  });
+  setCockpitPageProvider('buildTest', async () => ({
+    lastBuildOk: lastBuildOk ?? null,
+    lastTest: lastTestSummary
+      ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped }
+      : null,
+  }));
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => void refreshStatus()),

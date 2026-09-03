@@ -13,6 +13,86 @@ export interface CockpitAssets {
   codiconCss: string;
 }
 
+/* ------------------------------------------------------------------ *
+ * Page content payloads (P-G2 adapters feed these).
+ * ------------------------------------------------------------------ */
+
+export interface ToolChip {
+  name: string;
+  ok: boolean;
+}
+
+export interface TestSummaryPayload {
+  passed?: number;
+  failed?: number;
+  skipped?: number;
+}
+
+export interface OverviewPayload {
+  projectName?: string;
+  version?: string;
+  buildType?: string;
+  healthScore?: number;
+  tools: ToolChip[];
+  lastBuildOk: boolean | null;
+  lastTest: TestSummaryPayload | null;
+}
+
+export interface BuildTestPayload {
+  lastBuildOk: boolean | null;
+  lastTest: TestSummaryPayload | null;
+}
+
+export type PagePayload = OverviewPayload | BuildTestPayload | Record<string, unknown> | undefined;
+
+function statusMark(ok: boolean | null | undefined): string {
+  if (ok === undefined || ok === null) {
+    return '·';
+  }
+  return ok ? '✓' : '✗';
+}
+
+function overviewContent(p: OverviewPayload): string {
+  const health = p.healthScore === undefined ? '' : `<span class="chip ${p.healthScore >= 80 ? 'ok' : p.healthScore >= 50 ? 'warn' : 'fail'}">健康分 ${p.healthScore}</span>`;
+  const tools = p.tools.map((t) => `<span class="status">${t.ok ? '✓' : '✗'} ${esc(t.name)}</span>`).join(' ');
+  return `<div class="row">${health}</div>
+    <div class="grid">
+      <div class="card"><div class="ct">最近构建</div><div class="cv">${statusMark(p.lastBuildOk)} ${p.lastBuildOk === null ? '未运行' : p.lastBuildOk ? '成功' : '失败'}</div></div>
+      <div class="card"><div class="ct">最近测试</div><div class="cv">${p.lastTest ? `${statusMark((p.lastTest.failed ?? 0) === 0)} ${p.lastTest.passed ?? 0}/${(p.lastTest.failed ?? 0) + (p.lastTest.passed ?? 0)}` : '未运行'}</div></div>
+    </div>
+    <div class="row">${tools}</div>
+    <div class="actions">
+      <button class="primary" data-cmd="het.test"><i class="codicon codicon-play"></i>构建并测试</button>
+      <button class="primary" data-cmd="het.docs"><i class="codicon codicon-book"></i>文档</button>
+      <button class="primary" data-cmd="het.quality"><i class="codicon codicon-shield"></i>质量</button>
+      <button class="primary" data-cmd="het.release"><i class="codicon codicon-rocket"></i>发布</button>
+    </div>`;
+}
+
+function buildTestContent(p: BuildTestPayload): string {
+  const line = `最近构建 ${statusMark(p.lastBuildOk)} · 测试 ${p.lastTest ? `通过 ${p.lastTest.passed ?? 0} · 失败 ${p.lastTest.failed ?? 0} · 跳过 ${p.lastTest.skipped ?? 0}` : '未运行'}`;
+  return `<div class="row"><span class="status">${line}</span></div>
+    <div class="actions">
+      <button class="primary" data-cmd="het.build"><i class="codicon codicon-tools"></i>构建</button>
+      <button class="primary" data-cmd="het.test"><i class="codicon codicon-beaker"></i>构建并测试</button>
+      <button data-cmd="het.showTestResults">查看测试结果</button>
+    </div>
+    <div class="placeholder">构建日志将自动出现在底部抽屉（运行中自动展开）。</div>`;
+}
+
+/** Render the full main-region HTML for a page with its payload (P-G2). */
+export function buildPageContentHtml(page: CockpitPage, payload: PagePayload): string {
+  const def = PAGES.find((p) => p.id === page) ?? PAGES[0];
+  const head = `<h1>${esc(def.label)}</h1><div class="sub">${esc(def.hint)}</div>`;
+  if (page === 'overview') {
+    return `<section class="page">${head}${overviewContent(payload as OverviewPayload)}</section>`;
+  }
+  if (page === 'buildTest') {
+    return `<section class="page">${head}${buildTestContent(payload as BuildTestPayload)}</section>`;
+  }
+  return `<section class="page">${head}<div class="placeholder">（P-G2 将在此接入「${esc(def.label)}」页面内容；本页为驾驶舱骨架占位）</div></section>`;
+}
+
 function railHtml(active: CockpitPage): string {
   return PAGES.map(
     (p) =>
@@ -123,6 +203,13 @@ export function buildCockpitHtml(s: CockpitState, assets: CockpitAssets): string
   .drawer pre { margin: 0; padding: 6px 12px; max-height: 180px; overflow-y: auto;
     font-size: 11px; font-family: var(--vscode-editor-font-family); background: var(--vscode-textCodeBlock-background,#111); }
   .warn { padding: 6px 12px; font-size: 12px; }
+  .grid { display: flex; gap: 10px; margin: 8px 0; }
+  .card { border: 1px solid var(--vscode-widget-border,#333); border-radius: 8px;
+    padding: 10px 14px; background: var(--vscode-editorWidget-background); min-width: 160px; }
+  .card .ct { font-size: 11px; opacity: .7; }
+  .card .cv { font-size: 15px; font-weight: 600; margin-top: 4px; }
+  button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground);
+    border: none; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
 </style>
 </head>
 <body>

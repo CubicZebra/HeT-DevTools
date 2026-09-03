@@ -1,7 +1,7 @@
 import * as assert from 'node:assert';
 import { PAGES, isCockpitPage, pageDef } from '../features/cockpit/layout';
 import { CockpitState, initialCockpitState, reduceCockpit } from '../features/cockpit/state';
-import { buildCockpitHtml, renderCockpitRegions } from '../features/cockpit/webview/render';
+import { buildCockpitHtml, buildPageContentHtml, renderCockpitRegions } from '../features/cockpit/webview/render';
 
 const s0 = initialCockpitState();
 
@@ -106,5 +106,38 @@ describe('cockpit.render', () => {
     assert.ok(regions.drawer.includes('build'));
     const collapsed = renderCockpitRegions(s0);
     assert.ok(collapsed.drawer.includes('日志 · 问题 · 向导'));
+  });
+
+  it('renders overview page content with health, tools and primary actions', () => {
+    const html = buildPageContentHtml('overview', {
+      projectName: 'mylib',
+      healthScore: 91,
+      tools: [
+        { name: 'conan', ok: true },
+        { name: 'doxygen', ok: false },
+      ],
+      lastBuildOk: true,
+      lastTest: { passed: 7, failed: 0, skipped: 1 },
+    });
+    assert.ok(html.includes('健康分 91'));
+    assert.ok(html.includes('✓ conan'));
+    assert.ok(html.includes('✗ doxygen'));
+    assert.ok(html.includes('data-cmd="het.test"'));
+    assert.ok(html.includes('codicon-play'));
+  });
+
+  it('renders build-test page content with results line', () => {
+    const html = buildPageContentHtml('buildTest', {
+      lastBuildOk: false,
+      lastTest: { passed: 3, failed: 2, skipped: 0 },
+    });
+    assert.ok(html.includes('失败 2'));
+    assert.ok(html.includes('data-cmd="het.build"'));
+    assert.ok(html.includes('codicon-beaker'));
+  });
+
+  it('renders placeholder for pages without adapters yet', () => {
+    const html = buildPageContentHtml('deps', undefined);
+    assert.ok(html.includes('P-G2 将在此接入「依赖」'));
   });
 });
