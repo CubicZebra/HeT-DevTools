@@ -2,8 +2,13 @@ import { isAbsolute, join } from 'node:path';
 import * as vscode from 'vscode';
 import { EXTENSION_ID, LOG_CHANNEL_NAME, log, setOutputChannel } from './constants';
 import { locateConan, runConanCreate } from './core/conanService';
+import { runHealthCheck } from './core/healthCheck';
 import { parseCompilerOutput } from './core/outputParser';
 import { detectProjectsIn } from './core/projectDetector';
+import { detectToolchain } from './core/toolchainDetector';
+import { showDashboardPanel } from './features/dashboard/panel';
+import { DashboardSnapshot } from './features/ui';
+import { showWelcomePanel } from './features/welcome/panel';
 import { FcppProject, ParsedIssue } from './types';
 
 let channel: vscode.OutputChannel | undefined;
@@ -42,7 +47,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.getCurrentProject', () => currentProject?.metadata?.name ?? null),
     vscode.commands.registerCommand('het.refresh', () => refreshStatus()),
     vscode.commands.registerCommand('het.build', () => buildProject()),
+    vscode.commands.registerCommand('het.welcome', () => openWelcome(context)),
+    vscode.commands.registerCommand('het.dashboard', () => openDashboard(context)),
+    vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
   );
+
+  // First-run onboarding (never inside the automated extension test host).
+  const isTestHost = process.argv.some((a) => a.includes('--extensionTestsPath'));
+  if (!isTestHost && currentProject && !context.workspaceState.get<boolean>('het.welcomeSeen')) {
+    openWelcome(context);
+  }
+}
+
+/** Assemble the data snapshot shared by the dashboard / welcome panels. */
+async function buildSnapshot(): Promise<DashboardSnapshot> {
+  const tools = await detectToolchain();
+  const health = await runHealthCheck({ project: currentProject, tools });
+  return { project: currentProject, tools, health };
+}
+
+function runHostCommand(command: string): void {
+  void vscode.commands.executeCommand(command);
+}
+
+function openWelcome(context: vscode.ExtensionContext): void {
+  showWelcomePanel(context, {
+    getSnapshot: buildSnapshot,
+    runCommand: runHostCommand,
+    onDismiss: () => void context.workspaceState.update('het.welcomeSeen', true),
+  });
+}
+
+function openDashboard(context: vscode.ExtensionContext): void {
+  showDashboardPanel(context, { getSnapshot: buildSnapshot, runCommand: runHostCommand });
 }
 
 /** Detect fcpp projects in the current window and update the status bar. */

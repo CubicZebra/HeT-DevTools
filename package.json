@@ -51,6 +51,18 @@
       {
         "command": "het.build",
         "title": "HeT DevTools: 构建项目"
+      },
+      {
+        "command": "het.welcome",
+        "title": "HeT DevTools: 入门向导"
+      },
+      {
+        "command": "het.dashboard",
+        "title": "HeT DevTools: 打开驾驶舱"
+      },
+      {
+        "command": "het.healthCheck",
+        "title": "HeT DevTools: 项目体检（驾驶舱）"
       }
     ]
   },

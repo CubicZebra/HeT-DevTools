@@ -44,5 +44,9 @@ export async function run(): Promise<void> {
   const detectedName = await vscode.commands.executeCommand<string | null>('het.getCurrentProject');
   assert.strictEqual(detectedName, 'mini-fcpp', 'host should detect the mini-fcpp project');
 
+  // Phase 1: dashboard webview opens without throwing (T-1.8 smoke).
+  await vscode.commands.executeCommand('het.dashboard');
+  await new Promise((r) => setTimeout(r, 500));
+
   console.log('[integration-smoke] OK - extension active in ' + folders[0].uri.fsPath);
 }
