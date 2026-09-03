@@ -10,6 +10,7 @@ import { detectToolchain } from './core/toolchainDetector';
 import { showDashboardPanel } from './features/dashboard/panel';
 import { showDepsPanel, DepAddInput } from './features/deps/panel';
 import { ModulePanelInput, showModuleWizardPanel } from './features/moduleWizard/panel';
+import { DiscoveredModule, showTestgenPanel } from './features/testgen/panel';
 import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
 import { DashboardSnapshot } from './features/ui';
@@ -20,6 +21,7 @@ import {
   removeDependency,
 } from './core/dependencyService';
 import { planModuleFiles } from './core/moduleTemplate';
+import { planModuleTests, scanHeader } from './core/testgen';
 import { applyMetadataPatch, loadMetadata } from './core/metadataService';
 import { pathExists, readText, writeJson, writeText } from './utils/fs';
 import { FcppMetadata, FcppProject, ParsedIssue } from './types';
@@ -72,6 +74,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.openDeps', () => openDepsPanel(context)),
     vscode.commands.registerCommand('het.addDependency', () => openDepsPanel(context)),
     vscode.commands.registerCommand('het.newModule', () => openModuleWizard(context)),
+    vscode.commands.registerCommand('het.generateTests', () => openTestgenPanel(context)),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
@@ -250,6 +253,70 @@ function openModuleWizard(context: vscode.ExtensionContext): void {
   };
 
   showModuleWizardPanel(context, { plan, create });
+}
+
+/** Test generation Mode A (G-09): discover modules, preview, add-only create. */
+function openTestgenPanel(context: vscode.ExtensionContext): void {
+  const listModules = async (): Promise<DiscoveredModule[]> => {
+    const root = currentProject?.root;
+    if (!root) {
+      return [];
+    }
+    const { readdir } = await import('node:fs/promises');
+    let names: string[] = [];
+    try {
+      names = await readdir(join(root, 'include'));
+    } catch {
+      return [];
+    }
+    const modules: DiscoveredModule[] = [];
+    for (const n of names.filter((f) => /\.(hpp|h)$/.test(f)).sort()) {
+      let content = '';
+      try {
+        content = await readText(join(root, 'include', n));
+      } catch {
+        continue;
+      }
+      const count = scanHeader(content).length;
+      if (count > 0) {
+        modules.push({ name: n.replace(/\.(hpp|h)$/, ''), header: n, apiCount: count });
+      }
+    }
+    return modules;
+  };
+
+  const create = async (moduleName: string) => {
+    const root = currentProject?.root;
+    if (!root) {
+      return { ok: false, message: '未检测到 fcpp 项目。' };
+    }
+    const plan = await planModuleTests(root, moduleName);
+    if (!plan.ok) {
+      return { ok: false, message: `无法生成：${plan.issues.join('；')}` };
+    }
+    const target = join(root, plan.relPath);
+    if (await pathExists(target)) {
+      return { ok: false, message: `${plan.relPath} 已存在，未覆盖。` };
+    }
+    const choice = await vscode.window.showWarningMessage(`创建 ${plan.relPath}？只新增测试文件，不改 include/ 与 src/。`, {
+      modal: true,
+    }, '创建', '取消');
+    if (choice !== '创建') {
+      return { ok: false, message: '已取消' };
+    }
+    await writeText(target, plan.content);
+    await refreshStatus();
+    return { ok: true, message: `已创建 ${plan.relPath}。可运行「构建并测试」验证。` };
+  };
+
+  showTestgenPanel(context, {
+    listModules,
+    preview: (m) => {
+      const root = currentProject?.root;
+      return root ? planModuleTests(root, m) : Promise.resolve({ ok: false, issues: ['未检测到 fcpp 项目'], relPath: '', content: '' });
+    },
+    create,
+  });
 }
 
 /** Settings editor (G-17): preview + confirm + backup write of metadata.json. */

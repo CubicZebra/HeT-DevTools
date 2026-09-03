@@ -98,6 +98,10 @@
       {
         "command": "het.newModule",
         "title": "HeT DevTools: 新增模块"
+      },
+      {
+        "command": "het.generateTests",
+        "title": "HeT DevTools: 生成测试（模式 A）"
       }
     ]
   },
