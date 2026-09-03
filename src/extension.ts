@@ -8,9 +8,11 @@ import { parseCompilerOutput } from './core/outputParser';
 import { detectProjectsIn } from './core/projectDetector';
 import { detectToolchain } from './core/toolchainDetector';
 import { showDashboardPanel } from './features/dashboard/panel';
+import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
 import { DashboardSnapshot } from './features/ui';
 import { showWelcomePanel } from './features/welcome/panel';
+import { applyMetadataPatch, loadMetadata } from './core/metadataService';
 import { FcppProject, ParsedIssue } from './types';
 
 let channel: vscode.OutputChannel | undefined;
@@ -57,6 +59,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.dashboard', () => openDashboard(context)),
     vscode.commands.registerCommand('het.test', () => runTests()),
     vscode.commands.registerCommand('het.showTestResults', () => showStoredTestResults(context)),
+    vscode.commands.registerCommand('het.openSettings', () => openSettingsPanel(context)),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
@@ -95,6 +98,56 @@ function openWelcome(context: vscode.ExtensionContext): void {
 
 function openDashboard(context: vscode.ExtensionContext): void {
   showDashboardPanel(context, { getSnapshot: buildSnapshot, runCommand: runHostCommand });
+}
+
+/** Settings editor (G-17): preview + confirm + backup write of metadata.json. */
+function openSettingsPanel(context: vscode.ExtensionContext): void {
+  showSettingsPanel(context, {
+    getMetadata: async () => {
+      const root = currentProject?.root;
+      if (!root) {
+        return { error: '未检测到 fcpp 项目：请先打开含 metadata.json 的库文件夹。' };
+      }
+      try {
+        return { metadata: await loadMetadata(root) };
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    savePatch: async (patch) => {
+      const root = currentProject?.root;
+      if (!root) {
+        return { ok: false, message: '未检测到 fcpp 项目。', diff: [] };
+      }
+      const preview = await applyMetadataPatch(root, patch); // dry-run
+      if (!preview.ok) {
+        const detail = preview.issues
+          .filter((i) => i.severity === 'error')
+          .map((i) => `${i.field ?? '?'}: ${i.message}`)
+          .join('；');
+        return { ok: false, message: `校验未通过：${detail}`, diff: preview.diff };
+      }
+      const summary = preview.diff.length === 0 ? '（无字段变化）' : preview.diff.map((d) => d.field).join(', ');
+      const choice = await vscode.window.showWarningMessage(
+        `将写回 ${preview.diff.length} 项变更：${summary}。原文件会备份为 metadata.json.bak。`,
+        { modal: true },
+        '应用',
+        '取消',
+      );
+      if (choice !== '应用') {
+        return { ok: false, message: '已取消（未写回）', diff: preview.diff };
+      }
+      const applied = await applyMetadataPatch(root, patch, { persist: true });
+      return {
+        ok: applied.ok,
+        message: applied.ok ? `已保存 ${applied.diff.length} 项变更（备份 .bak）` : '写回失败',
+        diff: applied.diff,
+      };
+    },
+    refreshProject: async () => {
+      await refreshStatus();
+    },
+  });
 }
 
 /** Detect fcpp projects in the current window and update the status bar. */

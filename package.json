@@ -82,6 +82,10 @@
       {
         "command": "het.showTestResults",
         "title": "HeT DevTools: 查看测试结果"
+      },
+      {
+        "command": "het.openSettings",
+        "title": "HeT DevTools: 项目设置（metadata.json）"
       }
     ]
   },
