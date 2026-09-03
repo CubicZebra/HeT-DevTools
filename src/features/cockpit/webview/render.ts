@@ -533,9 +533,19 @@ export function buildCockpitHtml(
       });
       document.getElementById('wizard').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-wizard]');
-        if (btn && btn.getAttribute('data-wizard') !== 'submit') {
-          vscode.postMessage({ type: 'cockpit:wizard', action: btn.getAttribute('data-wizard') });
+        if (!btn || btn.getAttribute('data-wizard') === 'submit') { return; }
+        const action = btn.getAttribute('data-wizard');
+        let data;
+        if (action === 'next' || action === 'finish') {
+          // “下一步/创建”位于表单之外，点击时同样采集当前步骤的表单值，
+          // 否则草稿永远收不到 name 等字段（destination 停留在 my-lib）。
+          const form = document.querySelector('#wizard form[data-wizard="submit"]');
+          if (form) {
+            data = {};
+            new FormData(form).forEach((v, k) => { data[k] = String(v); });
+          }
         }
+        vscode.postMessage({ type: 'cockpit:wizard', action, data });
       });
       document.getElementById('wizard').addEventListener('submit', (e) => {
         const form = e.target.closest('form[data-wizard="submit"]');

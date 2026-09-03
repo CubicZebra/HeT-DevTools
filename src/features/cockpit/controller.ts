@@ -121,10 +121,18 @@ function handleWizardMessage(msg: { action: string; data?: Record<string, string
     void cockpitContext?.workspaceState.update(persistKey('wizardDraft'), wizardDraft);
     cockpitState = reduceCockpit(cockpitState, { type: 'wizard:step', step: Math.min(5, w.step + 1) });
   } else if (msg.action === 'next' && w) {
+    if (msg.data) {
+      wizardDraft = { ...wizardDraft, ...msg.data };
+      void cockpitContext?.workspaceState.update(persistKey('wizardDraft'), wizardDraft);
+    }
     cockpitState = reduceCockpit(cockpitState, { type: 'wizard:step', step: Math.min(5, w.step + 1) });
   } else if (msg.action === 'prev' && w) {
     cockpitState = reduceCockpit(cockpitState, { type: 'wizard:step', step: Math.max(1, w.step - 1) });
   } else if (msg.action === 'finish' && w && wizardFinishHandler) {
+    if (msg.data) {
+      wizardDraft = { ...wizardDraft, ...msg.data };
+      void cockpitContext?.workspaceState.update(persistKey('wizardDraft'), wizardDraft);
+    }
     void (async () => {
       const res = await wizardFinishHandler?.(wizardDraft);
       if (res?.ok) {
