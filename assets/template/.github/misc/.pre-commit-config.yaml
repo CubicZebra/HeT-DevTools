@@ -1,0 +1,31 @@
+# Local first-line gates (CI mirrors the same rules in ci-orchestrator.yml).
+# Install: pip install pre-commit && pre-commit install
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+
+  - repo: local
+    hooks:
+      - id: clang-format-c
+        name: clang-format-c
+        entry: clang-format --dry-run --Werror --style=file:.github/misc/.clang-format-c
+        language: system
+        files: '\.(c|h)$'
+
+      - id: clang-format-cpp
+        name: clang-format-cpp
+        entry: clang-format --dry-run --Werror --style=file:.github/misc/.clang-format-cpp
+        language: system
+        files: '\.(cpp|hpp)$'
+
+      - id: commitlint
+        name: commitlint
+        entry: npx commitlint --edit --config .github/misc/commitlint.config.js
+        language: system
+        stages: [commit-msg]

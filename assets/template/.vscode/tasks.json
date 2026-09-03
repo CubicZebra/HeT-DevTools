@@ -1,0 +1,41 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "format-check",
+      "type": "shell",
+      "command": "find include src -type f \\( -name '*.c' -o -name '*.h' \\) -exec clang-format --dry-run --Werror --style=file:.github/misc/.clang-format-c {} + && find include src -type f \\( -name '*.cpp' -o -name '*.hpp' \\) -exec clang-format --dry-run --Werror --style=file:.github/misc/.clang-format-cpp {} +",
+      "problemMatcher": []
+    },
+    {
+      "label": "tidy",
+      "type": "shell",
+      "command": "clang-tidy --config-file=.github/misc/.clang-tidy src/*.cpp -- -std=c++17 -Iinclude",
+      "problemMatcher": []
+    },
+    {
+      "label": "schema-check",
+      "type": "shell",
+      "command": "npx ajv validate -s .github/misc/metadata.schema.json -d metadata.json --spec=draft7",
+      "problemMatcher": []
+    },
+    {
+      "label": "commit-lint",
+      "type": "shell",
+      "command": "npx commitlint --config .github/misc/commitlint.config.js --from HEAD~1 --to HEAD",
+      "problemMatcher": []
+    },
+    {
+      "label": "megalinter",
+      "type": "shell",
+      "command": "bash .github/misc/run-megalinter.sh",
+      "problemMatcher": []
+    },
+    {
+      "label": "test",
+      "type": "shell",
+      "command": "conan create . -s build_type=Debug --build=missing",
+      "problemMatcher": []
+    }
+  ]
+}

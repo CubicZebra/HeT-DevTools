@@ -1,0 +1,14 @@
+{
+  "name": "het-verify-runner",
+  "displayName": "HeT DevTools Installed Verification Runner",
+  "version": "0.0.1",
+  "publisher": "het-fti",
+  "description": "Loads the INSTALLED het-devtools extension from an isolated extensions dir and drives it via commands — zero manual interaction.",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ]
+}

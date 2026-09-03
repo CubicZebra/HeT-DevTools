@@ -1,0 +1,104 @@
+name: Release
+
+# Release runs standalone (on push to main) so it can hold scoped write
+# permissions and create tags/releases. It is gated by metadata.json:
+#   workflow_triggers.release == true  -> semantic-release may bump a version.
+# It is also still callable via workflow_call for manual/backward-compat use.
+
+on:
+  workflow_call:
+    # No inputs needed - this workflow uses secrets
+  push:
+    branches: [main]
+
+jobs:
+  gate:
+    name: Release Gate
+    # Skip on the template instantiation push (fresh repo, nothing to release).
+    if: ${{ github.event_name != 'push' || github.event.commits[0].message != 'Initial commit' }}
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.gate.outputs.should_release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check metadata release trigger
+        id: gate
+        run: |
+          python3 - <<'PY'
+          import json
+          meta = json.load(open('metadata.json'))
+          enabled = bool(meta.get('workflow_triggers', {}).get('release', False))
+          print(f'::notice::workflow_triggers.release = {enabled}')
+          print(f'should_release={str(enabled).lower()}')
+          PY
+
+  auto-release:
+    name: Auto Release
+    needs: gate
+    if: needs.gate.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund --ignore-scripts
+
+      # Snapshot metadata.json before semantic-release touches it, so we can
+      # prove afterwards that ONLY the version field changed (format preserved).
+      - name: Snapshot metadata.json
+        run: cp metadata.json /tmp/metadata.pre.json
+
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # NOTE 1: `--extends` resolves relative paths as ESM modules and fails
+          # with MODULE_NOT_FOUND for .json — always use the absolute path.
+          # NOTE 2: repositoryUrl is derived from runner env, no hardcoded URL.
+          ./node_modules/.bin/semantic-release -r "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --extends "$GITHUB_WORKSPACE/.github/misc/.releaserc.json" 2>&1 | tee /tmp/semantic-release.log
+          test "${PIPESTATUS[0]}" -eq 0
+
+      - name: Verify metadata.json format preserved
+        run: |
+          # Closed-loop guard: the release may change ONLY the version field.
+          # Any other byte-level change (reformatting by a future tool, etc.)
+          # fails the job loudly instead of silently drifting the file format.
+          python3 - <<'PY'
+          import json, difflib, sys
+          pre = open('/tmp/metadata.pre.json', encoding='utf-8').read()
+          post = open('metadata.json', encoding='utf-8').read()
+          json.loads(pre)
+          json.loads(post)
+          diff = [
+              l for l in difflib.unified_diff(pre.splitlines(), post.splitlines(), lineterm='')
+              if (l.startswith('+') or l.startswith('-')) and not l.startswith(('+++', '---'))
+          ]
+          ok = len(diff) == 2 and all('"version"' in l for l in diff)
+          if not ok:
+              print('::error::metadata.json drifted beyond the version field during release')
+              print('\n'.join(diff))
+              sys.exit(1)
+          print('metadata.json format preserved; only the version field changed')
+          PY
+
+      - name: Emit release log
+        if: always()
+        run: |
+          echo "::notice::visible tags: $(git tag -l | tr '\n' ' ')"
+          echo "::notice::commits since v1.0.0: $(git rev-list v1.0.0..HEAD --count 2>/dev/null || echo N/A)"
+          tail -n 40 /tmp/semantic-release.log | sed 's/^/::notice::/'

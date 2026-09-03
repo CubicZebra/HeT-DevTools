@@ -1,0 +1,72 @@
+# .mega-linter.yml
+#
+# Version note: this config is consumed by BOTH CI and local runs. The MegaLinter
+# image version is pinned outside this file — in the CI action
+# (oxsecurity/megalinter@e08c2b05... = v8.8.0) and in .github/misc/run-megalinter.sh
+# (--release v8.8.0). Keep those two in sync.
+FILTER_REGEX_INCLUDE: "(include|src)/"
+
+ENABLE: "C,CPP"
+DISABLE: "SPELL"
+
+ENABLE_LINTERS:
+  - REPOSITORY_GITLEAKS
+  - REPOSITORY_SEMGREP
+  - REPOSITORY_CHECKOV
+  - REPOSITORY_DEVSKIM
+
+DISABLE_LINTERS:
+  - C_CPPLINT
+  - CPP_CPPLINT
+  # clang-tidy is owned by the native required gate in security-linters.yml
+  # (MegaLinter cannot resolve conan/apt dependency headers)
+  - C_CLANG_TIDY
+  - CPP_CLANG_TIDY
+
+COPYPASTE_JSCPD_ARGUMENTS:
+  - "--pattern"
+  - "include/**/*,src/**/*"
+
+REPOSITORY_GITLEAKS_ARGUMENTS:
+  - "-c"
+  - ".github/misc/.gitleaks.toml"
+  - "--verbose"
+
+REPOSITORY_SEMGREP_ARGUMENTS:
+  - "--include"
+  - "include/"
+  - "--include"
+  - "src/"
+
+REPOSITORY_CHECKOV_CONFIG_FILE: ".github/misc/.checkov.yml"
+
+REPOSITORY_CHECKOV_ARGUMENTS:
+  # NOTE: no `-d .` here — the checkov descriptor already runs `--directory .`,
+  # adding it again makes checkov scan the repo TWICE (every finding duplicated).
+  - "--skip-path"
+  - "include/"
+  - "--skip-path"
+  - "src/"
+  - "--skip-path"
+  - "test_package/test/"
+  - "--skip-path"
+  - "test_package/main.cpp"
+  # Avoid scanning MegaLinter's own report output from a previous run
+  - "--skip-path"
+  - "megalinter-reports/"
+
+REPOSITORY_DEVSKIM_ARGUMENTS:
+  - "--include-globs"
+  - "**/include/**,**/src/**"
+  - "--ignore-globs"
+  - "**/test_package/**"
+
+# clang-format configs. NOTE: must use the FLAT <LINTER>_CONFIG_FILE form —
+# MegaLinter reads `C_CLANG_FORMAT_CONFIG_FILE` as a top-level key; the nested
+# `C_CLANG_FORMAT: {CONFIG_FILE: ...}` form is NOT parsed and silently falls
+# back to clang-format's LLVM defaults (which is why every line was flagged).
+C_CLANG_FORMAT_CONFIG_FILE: ".github/misc/.clang-format-c"
+CPP_CLANG_FORMAT_CONFIG_FILE: ".github/misc/.clang-format-cpp"
+
+SARIF_REPORTER: true
+MARKDOWN_SUMMARY_REPORTER: true

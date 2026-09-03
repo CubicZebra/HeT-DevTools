@@ -4,4 +4,3 @@ out/
 .vscode-test/
 *.vsix
 *.log
-assets/template/

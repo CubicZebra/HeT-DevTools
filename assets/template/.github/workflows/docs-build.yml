@@ -1,0 +1,35 @@
+name: Docs
+
+# This workflow can be triggered in two ways:
+# 1. Via workflow_call from ci-orchestrator.yml (recommended)
+# 2. Directly on push/pull_request (for backward compatibility)
+
+on:
+  workflow_call:
+    # No inputs needed - documentation build is self-contained
+
+env:
+  CONAN_HOME: ~/.conan2
+
+jobs:
+  docs:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install documentation dependencies
+        run: |
+          sudo apt install -y doxygen graphviz
+          pip install --only-binary :all: numpy==2.1.3 sphinx==7.4.7 sphinx-intl==2.2.0 sphinx-rtd-theme==2.0.0
+
+      - name: Build documentation
+        run: |
+          python ./docs/build.py

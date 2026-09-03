@@ -2257,8 +2257,10 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
     return true;
   };
 
+  let ok = false;
   if (prefer === 'local') {
-    if (!(await tryLocal())) {
+    ok = await tryLocal();
+    if (!ok) {
       const available = localCandidates.map((c) => c.path).join('；');
       return {
         ok: false,
@@ -2267,7 +2269,7 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
     }
   } else if (prefer === 'release') {
     // online latest → pinned → local (each fallback is explicit + recorded)
-    let ok = await tryRemote(undefined, `在线最新（${repo} 默认分支）`);
+    ok = await tryRemote(undefined, `在线最新（${repo} 默认分支）`);
     if (!ok) {
       const pinned = resolveCloneRef(source, 'recommended', { releases: [], tags: [] });
       ok = await tryRemote(pinned.cloneRef, pinned.label);
@@ -2275,18 +2277,27 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
         fallbackNote = '在线最新不可用，已回退到固定哈希版本。';
       }
     }
-    if (!ok && (await tryLocal())) {
-      fallbackNote = '在线不可用，已自动回退到本地模板。';
+    if (!ok) {
+      ok = await tryLocal();
+      if (ok) {
+        fallbackNote = '在线不可用，已自动回退到本地模板。';
+      }
     }
     if (!ok) {
       return { ok: false, message: `在线克隆失败（${repo}）且无本地模板可用。请检查网络或配置本地模板。` };
     }
   } else {
-    // pinned (recommended) → local
+    // pinned (recommended) → local. NOTE: the final gate must be the actual
+    // template outcome (remote OR local fallback), not just the remote flag —
+    // otherwise an offline machine with a bundled template wrongly reports
+    // "无本地模板可用" (regression caught by verify-installed).
     const decision = resolveCloneRef(source, 'recommended', { releases: [], tags: [] });
-    const ok = await tryRemote(decision.cloneRef, decision.label);
-    if (!ok && (await tryLocal())) {
-      fallbackNote = '在线不可用，已自动回退到本地模板。';
+    ok = await tryRemote(decision.cloneRef, decision.label);
+    if (!ok) {
+      ok = await tryLocal();
+      if (ok) {
+        fallbackNote = '在线不可用，已自动回退到本地模板。';
+      }
     }
     if (!ok) {
       return { ok: false, message: `在线克隆失败（${decision.cloneRef}）且无本地模板可用。请检查网络或配置本地模板。` };

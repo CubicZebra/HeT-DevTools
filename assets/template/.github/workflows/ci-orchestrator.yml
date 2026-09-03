@@ -1,0 +1,175 @@
+name: CI Orchestrator
+
+# Main entry point for all CI workflows
+# Analyzes metadata.json once and triggers downstream workflows conditionally
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      commit_messages:
+        description: 'Emoji trigger simulation (optional)'
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  group: orchestrator-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least-privilege: NO workflow-level permissions block. Each job that needs the
+# GITHUB_TOKEN declares its own scoped permissions; every other job uses the
+# default read-only token. Release is a standalone workflow (semver-release.yml)
+# so it can carry its own write permissions without broadening this orchestrator.
+
+jobs:
+  # Step 1: Call the metadata controller to analyze metadata.json
+  controller:
+    name: Analyze Metadata
+    # Template instantiation pushes the generated "Initial commit"; the
+    # template CI is already validated upstream, so a fresh repo skips every
+    # pipeline on its first run. Real pushes run the full pipeline as usual.
+    if: ${{ github.event_name != 'push' || github.event.commits[0].message != 'Initial commit' }}
+    uses: ./.github/workflows/metadata-controller.yml
+    with:
+      event_name: ${{ github.event_name }}
+      # For push events, join commit messages. For PRs, use an empty string.
+      # workflow_dispatch can simulate emoji triggers via input.
+      commit_messages: ${{ github.event_name == 'push' && join(github.event.commits.*.message, '\n') || (github.event_name == 'workflow_dispatch' && github.event.inputs.commit_messages) || '' }}
+
+  # Step 2: Log the decisions (for debugging)
+  log-decisions:
+    name: Log Decisions
+    needs: controller
+    runs-on: ubuntu-latest
+    steps:
+      - name: Display workflow decisions
+        run: |
+          echo "============================================"
+          echo "           📊 CI ORCHESTRATOR              "
+          echo "============================================"
+          echo ""
+          echo "📦 Package Information:"
+          echo "  Name: ${{ needs.controller.outputs.pkg_name }}"
+          echo "  Version: ${{ needs.controller.outputs.version }}"
+          echo "  Build Type: ${{ needs.controller.outputs.build_type }}"
+          echo ""
+          echo "🎯 Workflow Triggers:"
+          echo "  🏗️  Build:      ${{ needs.controller.outputs.trigger_build }}"
+          echo "  🧪 Tests:      ${{ needs.controller.outputs.trigger_tests }}"
+          echo "  📦 Release:    ${{ needs.controller.outputs.trigger_release }}"
+          echo "  📚 Docs:       ${{ needs.controller.outputs.trigger_docs }}"
+          echo "  🛡️  Security:  ${{ needs.controller.outputs.trigger_security }}"
+          echo ""
+          echo "⚙️  Test Configuration:"
+          echo "  Save Logs: ${{ needs.controller.outputs.saving_tests_log }}"
+          echo "  Coverage:  ${{ needs.controller.outputs.activate_code_coverage }}"
+          echo ""
+          echo "============================================"
+
+  # Step 2b: Enforce commit conventions (canonical form, see .github/misc/commitlint.config.js)
+  commit-lint:
+    name: Commit Lint
+    # Skip on the template instantiation push (see controller job above).
+    if: ${{ github.event_name != 'push' || github.event.commits[0].message != 'Initial commit' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund --ignore-scripts
+
+      - name: Lint push commits
+        if: github.event_name == 'push'
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          FROM="$EVENT_BEFORE"
+          if [[ "$FROM" == "0000000000000000000000000000000000000000" ]]; then
+            # First push of a branch: only the last commit exists locally
+            ./node_modules/.bin/commitlint --config .github/misc/commitlint.config.js --from HEAD~1 --to HEAD --verbose
+          else
+            ./node_modules/.bin/commitlint --config .github/misc/commitlint.config.js --from "$FROM" --to HEAD --verbose
+          fi
+
+      - name: Lint PR title
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s' "$PR_TITLE" | ./node_modules/.bin/commitlint --config .github/misc/commitlint.config.js
+
+  # Step 2c: Validate metadata.json against the machine-readable contract
+  schema-check:
+    name: Metadata Schema
+    # Skip on the template instantiation push (see controller job above).
+    if: ${{ github.event_name != 'push' || github.event.commits[0].message != 'Initial commit' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund --ignore-scripts
+
+      - name: Validate metadata.json
+        run: ./node_modules/.bin/ajv validate -s .github/misc/metadata.schema.json -d metadata.json --spec=draft7
+
+  # Step 3: Trigger downstream workflows based on controller outputs
+  
+  build:
+    name: Build
+    needs: controller
+    if: needs.controller.outputs.trigger_build == 'true'
+    uses: ./.github/workflows/ci-build-test.yml
+    with:
+      pkg_name: ${{ needs.controller.outputs.pkg_name }}
+
+  tests:
+    name: Tests
+    needs: controller
+    if: needs.controller.outputs.trigger_tests == 'true'
+    uses: ./.github/workflows/full-test-automation.yml
+    with:
+      pkg_name: ${{ needs.controller.outputs.pkg_name }}
+      saving_tests_log: ${{ needs.controller.outputs.saving_tests_log }}
+      activate_code_coverage: ${{ needs.controller.outputs.activate_code_coverage }}
+
+  # Release is NOT triggered here. It runs as its own workflow
+  # (semver-release.yml) on push to main so it can hold scoped write
+  # permissions, keeping this orchestrator least-privilege.
+
+  docs:
+    name: Documentation
+    needs: controller
+    if: needs.controller.outputs.trigger_docs == 'true'
+    uses: ./.github/workflows/docs-build.yml
+
+  security:
+    name: Security Scan
+    needs: controller
+    if: needs.controller.outputs.trigger_security == 'true'
+    uses: ./.github/workflows/security-linters.yml
+    with:
+      validate_all_codebase: ${{ github.event_name == 'push' && 'true' || 'false' }}
+
