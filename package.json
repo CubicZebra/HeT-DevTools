@@ -106,6 +106,10 @@
       {
         "command": "het.refreshTests",
         "title": "HeT DevTools: 刷新测试浏览器"
+      },
+      {
+        "command": "het.coverage",
+        "title": "HeT DevTools: 覆盖率视图"
       }
     ]
   },

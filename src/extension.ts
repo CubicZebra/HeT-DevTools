@@ -11,6 +11,7 @@ import { showDashboardPanel } from './features/dashboard/panel';
 import { showDepsPanel, DepAddInput } from './features/deps/panel';
 import { ModulePanelInput, showModuleWizardPanel } from './features/moduleWizard/panel';
 import { DiscoveredModule, showTestgenPanel } from './features/testgen/panel';
+import { CoverageState, showCoveragePanel } from './features/coverage/panel';
 import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
 import { DashboardSnapshot } from './features/ui';
@@ -79,6 +80,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.addDependency', () => openDepsPanel(context)),
     vscode.commands.registerCommand('het.newModule', () => openModuleWizard(context)),
     vscode.commands.registerCommand('het.generateTests', () => openTestgenPanel(context)),
+    vscode.commands.registerCommand('het.coverage', () => openCoveragePanel(context)),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
@@ -321,6 +323,110 @@ function openTestgenPanel(context: vscode.ExtensionContext): void {
     },
     create,
   });
+}
+
+/** Coverage view (G-06): enable flag + run coverage build + open report. */
+function openCoveragePanel(context: vscode.ExtensionContext): void {
+  let reportCache = '';
+  let reportCacheTime = 0;
+
+  const locateReport = async (): Promise<string> => {
+    const root = currentProject?.root;
+    if (!root) {
+      return '';
+    }
+    if (reportCache && Date.now() - reportCacheTime < 30_000) {
+      return reportCache;
+    }
+    const { readdir } = await import('node:fs/promises');
+    const hits: string[] = [];
+    const walk = async (dir: string, depth: number): Promise<void> => {
+      if (depth > 6 || hits.length > 0) {
+        return;
+      }
+      let entries: { name: string; isDir: boolean }[] = [];
+      try {
+        const dirents = await readdir(dir, { withFileTypes: true });
+        entries = dirents.map((d) => ({ name: d.name, isDir: d.isDirectory() }));
+      } catch {
+        return;
+      }
+      if (entries.some((e) => e.name === 'index.html' && dir.endsWith('coverage_report'))) {
+        hits.push(join(dir, 'index.html'));
+        return;
+      }
+      for (const e of entries) {
+        if (e.isDir && !e.name.startsWith('.') && e.name !== 'node_modules') {
+          await walk(join(dir, e.name), depth + 1);
+        }
+      }
+    };
+    // fast path first: project-local build trees
+    await walk(join(root, 'build'), 0);
+    await walk(join(root, 'coverage_report'), 0);
+    if (hits.length === 0) {
+      // fallback: conan cache test-package build dirs
+      const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
+      await walk(join(home, '.conan2', 'p'), 0);
+    }
+    reportCache = hits[0] ?? '';
+    reportCacheTime = Date.now();
+    return reportCache;
+  };
+
+  const getState = async (): Promise<CoverageState> => {
+    const root = currentProject?.root;
+    if (!root || !currentProject?.metadata) {
+      return { projectName: '', enabled: false, reportPath: '' };
+    }
+    const meta = await loadMetadata(root);
+    return {
+      projectName: currentProject.metadata.name ?? '',
+      enabled: meta.activate_code_coverage === true,
+      reportPath: await locateReport(),
+    };
+  };
+
+  const toggle = async (enabled: boolean) => {
+    const root = currentProject?.root;
+    if (!root) {
+      return { ok: false, message: '未检测到 fcpp 项目。' };
+    }
+    const applied = await applyMetadataPatch(root, { activate_code_coverage: enabled }, { persist: true });
+    reportCache = '';
+    if (applied.ok) {
+      await refreshStatus();
+      return { ok: true, message: enabled ? '已开启 activate_code_coverage（备份 .bak）。' : '已关闭 activate_code_coverage。' };
+    }
+    return { ok: false, message: `写入失败：${applied.issues.map((i) => i.message).join('；')}` };
+  };
+
+  const runCoverage = async () => {
+    const project = currentProject;
+    if (!project || !project.metadata) {
+      return { ok: false, message: '未检测到 fcpp 项目。' };
+    }
+    const meta = await loadMetadata(project.root);
+    if (meta.activate_code_coverage !== true) {
+      return { ok: false, message: '请先开启 activate_code_coverage（覆盖率需要 g++/gcov 工具链）。' };
+    }
+    const result = await runConanOnce(project);
+    const issues = parseCompilerOutput(`${result.stdout}\n${result.stderr}`);
+    mapIssues(issues, project.root);
+    lastBuildOk = result.ok;
+    reportCache = '';
+    const report = await locateReport();
+    if (!result.ok) {
+      return { ok: false, message: '覆盖率构建失败：请查看“问题”面板。' };
+    }
+    if (report) {
+      void vscode.env.openExternal(vscode.Uri.file(report));
+      return { ok: true, message: `覆盖率构建成功，报告已打开：${report}` };
+    }
+    return { ok: false, message: '构建成功但未找到 coverage_report/index.html（MSVC 无法产出 gcov 报告，请用 g++/CI）。' };
+  };
+
+  showCoveragePanel(context, { getState, toggle, runCoverage });
 }
 
 /** Settings editor (G-17): preview + confirm + backup write of metadata.json. */
