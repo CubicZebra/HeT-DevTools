@@ -24,12 +24,19 @@ export interface CockpitTop {
   templateBehind: number;
 }
 
+/** P-G4 onboarding wizard overlay state (five steps). */
+export interface CockpitWizard {
+  step: number;
+  error?: string;
+}
+
 export interface CockpitState {
   page: CockpitPage;
   top: CockpitTop;
   drawer: CockpitDrawer;
   lastBuildOk: boolean | null;
   issueCount: number;
+  wizard: CockpitWizard | null;
 }
 
 export type CockpitEvent =
@@ -41,7 +48,10 @@ export type CockpitEvent =
   | { type: 'issue:summary'; count: number }
   | { type: 'template:update'; behind: number }
   | { type: 'health'; score: number }
-  | { type: 'project'; name: string };
+  | { type: 'project'; name: string }
+  | { type: 'wizard:open' }
+  | { type: 'wizard:close' }
+  | { type: 'wizard:step'; step: number; error?: string };
 
 const LOG_CAP = 200;
 
@@ -52,6 +62,7 @@ export function initialCockpitState(): CockpitState {
     drawer: { kind: 'none', expanded: false, title: '', lines: [] },
     lastBuildOk: null,
     issueCount: 0,
+    wizard: null,
   };
 }
 
@@ -100,6 +111,12 @@ export function reduceCockpit(state: CockpitState, event: CockpitEvent): Cockpit
       return { ...state, top: { ...state.top, health: event.score } };
     case 'project':
       return { ...state, top: { ...state.top, projectName: event.name } };
+    case 'wizard:open':
+      return { ...state, wizard: { step: 1 } };
+    case 'wizard:close':
+      return { ...state, wizard: null };
+    case 'wizard:step':
+      return { ...state, wizard: { step: event.step, error: event.error } };
     default:
       return state;
   }

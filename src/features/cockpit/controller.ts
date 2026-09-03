@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { initialCockpitState, reduceCockpit, CockpitEvent, CockpitState } from './state';
 import { isCockpitPage, CockpitPage } from './layout';
-import { buildCockpitHtml, buildPageContentHtml, renderCockpitRegions, PagePayload } from './webview/render';
+import { buildCockpitHtml, buildPageContentHtml, renderCockpitRegions, renderWizardRegion, CockpitWizardInfo, PagePayload } from './webview/render';
 
 /**
  * Cockpit controller (gui-rework-plan §7).
@@ -21,6 +21,18 @@ const pageHandlers = new Map<CockpitPage, (action: string, data: Record<string, 
 const pageHtmlCache = new Map<CockpitPage, string>();
 /** Sequence guard for the post-run auto-collapse timer. */
 let logDoneSeq = 0;
+/** P-G4 wizard host facts + draft accumulator + finish handler. */
+let wizardInfo: CockpitWizardInfo = { templateRepo: '', templateRef: '', modeLabel: '', parentDir: '' };
+let wizardDraft: Record<string, string> = {};
+let wizardFinishHandler: ((draft: Record<string, string>) => Promise<{ ok: boolean; message: string }>) | undefined;
+
+export function setCockpitWizardInfo(info: CockpitWizardInfo): void {
+  wizardInfo = info;
+}
+
+export function setCockpitWizardFinishHandler(handler: (draft: Record<string, string>) => Promise<{ ok: boolean; message: string }>): void {
+  wizardFinishHandler = handler;
+}
 
 export function getCockpitState(): CockpitState {
   return cockpitState;
@@ -47,7 +59,13 @@ function postState(): void {
   const cachedMain = pageHtmlCache.get(cockpitState.page);
   void cockpitPanel.webview.postMessage({
     type: 'cockpit:state',
-    regions: { top: regions.top, rail: regions.rail, drawer: regions.drawer, main: cachedMain ?? regions.main },
+    regions: {
+      top: regions.top,
+      rail: regions.rail,
+      drawer: regions.drawer,
+      main: cachedMain ?? regions.main,
+      wizard: renderWizardRegion(cockpitState.wizard, wizardInfo, wizardDraft),
+    },
   });
 }
 
@@ -61,6 +79,37 @@ async function loadPage(page: CockpitPage): Promise<void> {
     pageHtmlCache.set(page, buildPageContentHtml(page, payload));
   } catch {
     pageHtmlCache.delete(page);
+  }
+  postState();
+}
+
+/** P-G4 wizard message routing (open/close/next/prev/submit/finish). */
+function handleWizardMessage(msg: { action: string; data?: Record<string, string> }): void {
+  const w = cockpitState.wizard;
+  if (msg.action === 'open') {
+    cockpitState = reduceCockpit(cockpitState, { type: 'wizard:open' });
+  } else if (msg.action === 'close') {
+    cockpitState = reduceCockpit(cockpitState, { type: 'wizard:close' });
+    wizardDraft = {};
+  } else if (msg.action === 'submit' && w) {
+    wizardDraft = { ...wizardDraft, ...(msg.data ?? {}) };
+    cockpitState = reduceCockpit(cockpitState, { type: 'wizard:step', step: Math.min(5, w.step + 1) });
+  } else if (msg.action === 'next' && w) {
+    cockpitState = reduceCockpit(cockpitState, { type: 'wizard:step', step: Math.min(5, w.step + 1) });
+  } else if (msg.action === 'prev' && w) {
+    cockpitState = reduceCockpit(cockpitState, { type: 'wizard:step', step: Math.max(1, w.step - 1) });
+  } else if (msg.action === 'finish' && w && wizardFinishHandler) {
+    void (async () => {
+      const res = await wizardFinishHandler?.(wizardDraft);
+      if (res?.ok) {
+        wizardDraft = {};
+        cockpitState = reduceCockpit(cockpitState, { type: 'wizard:close' });
+      } else if (res) {
+        cockpitState = reduceCockpit(cockpitState, { type: 'wizard:step', step: w.step, error: res.message });
+      }
+      postState();
+    })();
+    return;
   }
   postState();
 }
@@ -102,7 +151,7 @@ export function openCockpitPanel(context: vscode.ExtensionContext): vscode.Webvi
   const assets = {
     codiconCss: cockpitPanel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media', 'codicon.css')).toString(),
   };
-  cockpitPanel.webview.html = buildCockpitHtml(cockpitState, assets);
+  cockpitPanel.webview.html = buildCockpitHtml(cockpitState, assets, wizardInfo, wizardDraft);
 
   cockpitPanel.webview.onDidReceiveMessage((message: { type: string; page?: string; expand?: boolean; command?: string; action?: string; data?: Record<string, string> }) => {
     if (message.type === 'cockpit:navigate' && message.page && isCockpitPage(message.page)) {
@@ -127,6 +176,8 @@ export function openCockpitPanel(context: vscode.ExtensionContext): vscode.Webvi
         }
         await loadPage(page);
       })();
+    } else if (message.type === 'cockpit:wizard') {
+      handleWizardMessage({ action: message.action as string, data: message.data });
     }
   });
 

@@ -18,7 +18,7 @@ import { CommitRequest, CommitState, showCommitPanel } from './features/commit/p
 import { ReleaseState, showReleasePanel } from './features/release/panel';
 import { PreflightState, PreflightItem, showPreflightPanel } from './features/preflight/panel';
 import { registerNavView } from './features/navView';
-import { openCockpitPanel, emitCockpitEvent, getCockpitState, setCockpitPageProvider, setCockpitPageHandler } from './features/cockpit/controller';
+import { openCockpitPanel, emitCockpitEvent, getCockpitState, setCockpitPageProvider, setCockpitPageHandler, setCockpitWizardInfo, setCockpitWizardFinishHandler } from './features/cockpit/controller';
 import { BenchState, showBenchPanel } from './features/bench/panel';
 import { CiState, CiRunInfo, showCiPanel } from './features/ci/panel';
 import { showSettingsPanel } from './features/settings/panel';
@@ -65,6 +65,7 @@ let lastTestSummary: GTestRunSummary | undefined;
 let lastBuildOk: boolean | undefined;
 let lastConanOutput = '';
 let lastBenchParse: { complete: boolean; cases: [string, string][] } | null = null;
+let wizardAutoOpened = false;
 const buildDiagnostics = vscode.languages.createDiagnosticCollection('het-build');
 
 /**
@@ -319,6 +320,61 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       lastBenchParse = { complete: parsed.complete, cases: parsed.cases.map((c) => [c.name, String(c.value)] as [string, string]) };
     }
   });
+
+  // P-G4: five-step onboarding wizard facts + finish handler.
+  {
+    const tpl = templateSourceForInit();
+    const parentDir =
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.env.USERPROFILE ?? '';
+    setCockpitWizardInfo({
+      templateRepo: tpl.repo ?? TEMPLATE_REPO,
+      templateRef: tpl.ref ?? 'HEAD',
+      modeLabel: tpl.mode === 'local' ? `本地副本：${tpl.localPath ?? ''}` : '远程（固定推荐版本）',
+      parentDir,
+    });
+    setCockpitWizardFinishHandler(async (draft) => {
+      const name = (draft.name ?? '').trim();
+      if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+        return { ok: false, message: '项目名仅允许字母/数字/下划线/连字符。' };
+      }
+      const parent = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.env.USERPROFILE ?? '';
+      if (!parent) {
+        return { ok: false, message: '无法确定目标目录：请先打开一个工作区文件夹。' };
+      }
+      const dest = join(parent, name);
+      const metadataExtra: Record<string, unknown> = {};
+      if (draft.buildType) {
+        metadataExtra.build_type = draft.buildType;
+      }
+      if (draft.cppstd) {
+        metadataExtra.build_cppstd = draft.cppstd;
+      }
+      if (draft.pybind === 'yes') {
+        metadataExtra.enable_python_bindings = true;
+      }
+      const choice = await vscode.window.showWarningMessage(
+        `在 ${dest} 创建项目 ${name}？\n\n将复制模板 → 改写 metadata.json（name/description/构建参数，备份 .bak）→ git init + 基线提交 → 记录 .het/template-ref.json。`,
+        { modal: true },
+        '创建',
+        '取消',
+      );
+      if (choice !== '创建') {
+        return { ok: false, message: '已取消' };
+      }
+      const res = await newProjectFromTemplate({
+        name,
+        description: (draft.description ?? '').trim() || undefined,
+        dest,
+        confirmed: true,
+        metadataExtra,
+      });
+      if (res.ok) {
+        void vscode.window.showInformationMessage(res.message);
+        await refreshStatus();
+      }
+      return { ok: res.ok, message: res.message };
+    });
+  }
 
   setCockpitPageProvider('collab', async () => {
     const root = rootOf();
@@ -2036,6 +2092,8 @@ interface NewProjectOpts {
   dest: string;
   gitAuthor?: { name: string; email: string };
   confirmed?: boolean;
+  /** Extra top-level metadata.json fields to patch on top of name/description. */
+  metadataExtra?: Record<string, unknown>;
 }
 
 /** Resolve the bootstrap template source (env override wins for dev/offline). */
@@ -2112,7 +2170,11 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
   await writeText(join(dest, markerPath()), encodeMarker({ repo: source.repo ?? TEMPLATE_REPO, ref: markerRef, label }));
 
   // rewrite identity fields (preview/confirm happens in the wizard)
-  const applied = await applyMetadataPatch(dest, { name, description: opts.description ?? name }, { persist: true });
+  const applied = await applyMetadataPatch(
+    dest,
+    { name, description: opts.description ?? name, ...(opts.metadataExtra ?? {}) },
+    { persist: true },
+  );
   if (!applied.ok) {
     return { ok: false, message: `metadata 改写失败：${applied.issues.map((i) => i.message).join('；')}` };
   }
@@ -2305,6 +2367,10 @@ async function refreshStatus(): Promise<void> {
   } else {
     currentProject = undefined;
     emitCockpitEvent({ type: 'project', name: '' });
+    if (!wizardAutoOpened) {
+      wizardAutoOpened = true;
+      emitCockpitEvent({ type: 'wizard:open' });
+    }
     statusItem.text = L('status.noProject');
     statusItem.tooltip = L('notify.noProject');
     statusItem.command = undefined;

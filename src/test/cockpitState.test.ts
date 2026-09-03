@@ -1,7 +1,7 @@
 import * as assert from 'node:assert';
 import { PAGES, isCockpitPage, pageDef } from '../features/cockpit/layout';
 import { CockpitState, initialCockpitState, reduceCockpit } from '../features/cockpit/state';
-import { buildCockpitHtml, buildPageContentHtml, renderCockpitRegions } from '../features/cockpit/webview/render';
+import { buildCockpitHtml, buildPageContentHtml, renderCockpitRegions, renderWizardRegion } from '../features/cockpit/webview/render';
 
 const s0 = initialCockpitState();
 
@@ -81,6 +81,17 @@ describe('cockpit.state', () => {
     assert.strictEqual(s.top.projectName, 'mylib');
     assert.strictEqual(s.top.health, 87);
     assert.strictEqual(s.top.templateBehind, 2);
+  });
+  it('wizard: open → step through → close', () => {
+    let s = reduceCockpit(s0, { type: 'wizard:open' });
+    assert.deepStrictEqual(s.wizard, { step: 1 });
+    s = reduceCockpit(s, { type: 'wizard:step', step: 2 });
+    assert.strictEqual(s.wizard?.step, 2);
+    s = reduceCockpit(s, { type: 'wizard:step', step: 5, error: 'x' });
+    assert.strictEqual(s.wizard?.step, 5);
+    assert.strictEqual(s.wizard?.error, 'x');
+    s = reduceCockpit(s, { type: 'wizard:close' });
+    assert.strictEqual(s.wizard, null);
   });
 });
 
@@ -190,5 +201,29 @@ describe('cockpit.render', () => {
     assert.ok(html.includes('matmul_4x4'));
     assert.ok(html.includes('12345'));
     assert.ok(html.includes('✓ 协议完整'));
+  });
+
+  it('renders the five-step wizard overlay with steps, forms and finish summary', () => {
+    const info = {
+      templateRepo: 'https://github.com/HeT-FTI/fcpp',
+      templateRef: 'abc123',
+      modeLabel: '本地副本：C:/tpl',
+      parentDir: 'C:/ws',
+    };
+    const w1 = renderWizardRegion({ step: 1 }, info, {});
+    assert.ok(w1.includes('新项目向导'));
+    assert.ok(w1.includes('模板仓库'));
+    assert.ok(w1.includes('HeT-FTI/fcpp'));
+    assert.ok(w1.includes('data-wizard="next"'));
+    assert.ok(!w1.includes('data-wizard="prev"'));
+    const w2 = renderWizardRegion({ step: 2 }, info, { name: 'mylib' });
+    assert.ok(w2.includes('data-wizard="submit"'));
+    assert.ok(w2.includes('value="mylib"'));
+    const w5 = renderWizardRegion({ step: 5, error: 'boom' }, info, { name: 'mylib', buildType: 'Release', cppstd: '20' });
+    assert.ok(w5.includes('C:/ws/mylib'));
+    assert.ok(w5.includes('data-wizard="finish"'));
+    assert.ok(w5.includes('boom'));
+    const none = renderWizardRegion(null, info, {});
+    assert.strictEqual(none, '');
   });
 });

@@ -7,7 +7,7 @@
 
 import { esc } from '../../ui';
 import { PAGES, CockpitPage } from '../layout';
-import { CockpitState } from '../state';
+import { CockpitState, CockpitWizard } from '../state';
 
 export interface CockpitAssets {
   codiconCss: string;
@@ -204,6 +204,114 @@ export function buildPageContentHtml(page: CockpitPage, payload: PagePayload): s
   return `<section class="page">${head}<div class="placeholder">（P-G2 将在此接入「${esc(def.label)}」页面内容；本页为驾驶舱骨架占位）</div></section>`;
 }
 
+/** P-G4 host-supplied wizard facts (template source, destination parent). */
+export interface CockpitWizardInfo {
+  templateRepo: string;
+  templateRef: string;
+  modeLabel: string;
+  parentDir: string;
+}
+
+const WIZARD_STEPS = ['模板源', '身份', '构建参数', '开关', '确认'];
+
+function selOption(value: string, label: string, current: string | undefined): string {
+  return `<option value="${esc(value)}"${current === value ? ' selected' : ''}>${esc(label)}</option>`;
+}
+
+/** Five-step onboarding overlay (P-G4). */
+export function renderWizardRegion(
+  wizard: CockpitWizard | null,
+  info: CockpitWizardInfo,
+  draft: Record<string, string>,
+): string {
+  if (!wizard) {
+    return '';
+  }
+  const dots = WIZARD_STEPS.map((label, i) => {
+    const cls = i + 1 === wizard.step ? 'cur' : i + 1 < wizard.step ? 'done' : '';
+    return `<span class="wstep ${cls}">${i + 1} ${esc(label)}</span>`;
+  }).join('');
+
+  const row = (k: string, v: string): string => `<div class="srow"><span class="sk">${esc(k)}</span><span class="sv">${esc(v)}</span></div>`;
+  let body = '';
+  if (wizard.step === 1) {
+    body = `<div class="slist">
+      ${row('模板仓库', info.templateRepo)}
+      ${row('固定 ref', info.templateRef)}
+      ${row('模板源', info.modeLabel)}
+    </div>
+    <div class="status">新项目将从模板复制骨架 → 改写 metadata.json（name/description）→ git init + 基线提交 → 记录 .het/template-ref.json。</div>`;
+  } else if (wizard.step === 2) {
+    body = `<form data-wizard="submit">
+      <label>项目名（字母/数字/下划线/连字符）
+        <input name="name" value="${esc(draft.name ?? '')}" placeholder="my-lib" required>
+      </label>
+      <label>描述
+        <input name="description" value="${esc(draft.description ?? '')}" placeholder="一句话描述">
+      </label>
+    </form>`;
+  } else if (wizard.step === 3) {
+    body = `<form data-wizard="submit">
+      <label>build_type
+        <select name="buildType">
+          ${selOption('Debug', 'Debug', draft.buildType)}
+          ${selOption('Release', 'Release', draft.buildType)}
+          ${selOption('RelWithDebInfo', 'RelWithDebInfo', draft.buildType)}
+          ${selOption('MinSizeRel', 'MinSizeRel', draft.buildType)}
+        </select>
+      </label>
+      <label>build_cppstd
+        <select name="cppstd">
+          ${selOption('11', 'C++11', draft.cppstd)}
+          ${selOption('14', 'C++14', draft.cppstd)}
+          ${selOption('17', 'C++17', draft.cppstd)}
+          ${selOption('20', 'C++20', draft.cppstd)}
+          ${selOption('23', 'C++23', draft.cppstd)}
+        </select>
+      </label>
+    </form>`;
+  } else if (wizard.step === 4) {
+    body = `<form data-wizard="submit">
+      <label>enable_python_bindings
+        <select name="pybind">
+          ${selOption('no', '否（默认）', draft.pybind)}
+          ${selOption('yes', '是', draft.pybind)}
+        </select>
+      </label>
+    </form>`;
+  } else {
+    const dest = joinWeb(draft.name ?? 'my-lib', info.parentDir);
+    body = `<div class="slist">
+      ${row('项目名', draft.name ?? '—')}
+      ${row('目标目录', dest)}
+      ${row('模板源', info.modeLabel)}
+      ${row('构建参数', `${draft.buildType ?? 'Debug'} · C++${draft.cppstd ?? '17'}`)}
+      ${row('Python 绑定', draft.pybind === 'yes' ? '开启' : '关闭')}
+    </div>
+    <div class="status">确认后将：复制模板 → 改写 metadata.json（备份 .bak）→ git init + 基线提交 → 记录模板 ref。离线环境使用本地模板副本。</div>`;
+  }
+
+  const err = wizard.error ? `<div class="warn">${esc(wizard.error)}</div>` : '';
+  const back = wizard.step > 1 ? `<button data-wizard="prev">上一步</button>` : '';
+  const next =
+    wizard.step < 5 ? `<button class="primary" data-wizard="next">下一步</button>` : `<button class="primary" data-wizard="finish">创建项目</button>`;
+  return `<div class="wiz-mask">
+    <div class="wiz-box">
+      <div class="wiz-head"><span class="wiz-title">新项目向导</span><button class="textbtn" data-wizard="close">✕</button></div>
+      <div class="wiz-dots">${dots}</div>
+      ${body}
+      ${err}
+      <div class="actions">${back}${next}</div>
+    </div>
+  </div>`;
+}
+
+/** Join a project name onto a parent dir (webview-safe, '/' separators only). */
+function joinWeb(name: string, parent: string): string {
+  const n = name.replace(/[\\/]/g, '');
+  return `${parent.replace(/[\\]+$/u, '')}/${n}`;
+}
+
 function railHtml(active: CockpitPage): string {
   return PAGES.map(
     (p) =>
@@ -218,7 +326,8 @@ function topHtml(s: CockpitState): string {
   const tpl = s.top.templateBehind > 0 ? `<span class="chip warn">●模板可更新 ${s.top.templateBehind}</span>` : '';
   const run = s.top.running ? `<span class="chip running"><span class="spin">●</span> ${esc(s.top.running)}</span>` : '';
   const name = s.top.projectName ? `<span class="proj"><i class="codicon codicon-package"></i>${esc(s.top.projectName)}</span>` : '<span class="proj dim">HeT DevTools</span>';
-  return `${name}${health}${tpl}${run}`;
+  const np = `<button class="chip action" data-wizard="open">＋ 新项目</button>`;
+  return `${name}${health}${tpl}${run}<span class="flex"></span>${np}`;
 }
 
 function mainHtml(s: CockpitState): string {
@@ -263,7 +372,12 @@ function drawerHtml(s: CockpitState): string {
 }
 
 /** Render the full cockpit document for the given state. */
-export function buildCockpitHtml(s: CockpitState, assets: CockpitAssets): string {
+export function buildCockpitHtml(
+  s: CockpitState,
+  assets: CockpitAssets,
+  wizardInfo?: CockpitWizardInfo,
+  wizardDraft?: Record<string, string>,
+): string {
   return `<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -337,6 +451,24 @@ export function buildCockpitHtml(s: CockpitState, assets: CockpitAssets): string
     padding: 10px 14px; background: var(--vscode-editorWidget-background); min-width: 160px; }
   .card .ct { font-size: 11px; opacity: .7; }
   .card .cv { font-size: 15px; font-weight: 600; margin-top: 4px; }
+  .flex { flex: 1; }
+  button.chip.action { border: none; cursor: pointer; font-size: 12px; }
+  .wiz-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex;
+    align-items: center; justify-content: center; z-index: 10; }
+  .wiz-box { width: 560px; max-width: 92vw; max-height: 84vh; overflow-y: auto;
+    background: var(--vscode-editor-background); border: 1px solid var(--vscode-widget-border,#444);
+    border-radius: 8px; padding: 14px 18px; }
+  .wiz-head { display: flex; align-items: center; justify-content: space-between; }
+  .wiz-title { font-weight: 600; font-size: 14px; }
+  .wiz-dots { display: flex; gap: 6px; margin: 10px 0 12px; flex-wrap: wrap; }
+  .wstep { font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); opacity: .55; }
+  .wstep.cur { opacity: 1; }
+  .wstep.done { background: #388a34; color: #fff; }
+  .wiz-box form { display: flex; flex-direction: column; gap: 10px; margin: 10px 0; }
+  .wiz-box label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+  .wiz-box input, .wiz-box select { background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border,#555); border-radius: 4px; padding: 5px 8px; font-size: 12px; }
   button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground);
     border: none; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
 </style>
@@ -348,6 +480,7 @@ export function buildCockpitHtml(s: CockpitState, assets: CockpitAssets): string
     <main class="main" id="main">${mainHtml(s)}</main>
   </div>
   <div id="drawer">${drawerHtml(s)}</div>
+  <div id="wizard">${renderWizardRegion(s.wizard, wizardInfo ?? { templateRepo: '', templateRef: '', modeLabel: '', parentDir: '' }, wizardDraft ?? {})}</div>
   <script>
     (function () {
       const vscode = acquireVsCodeApi();
@@ -383,6 +516,24 @@ export function buildCockpitHtml(s: CockpitState, assets: CockpitAssets): string
         const btn = e.target.closest('[data-cmd]');
         if (btn) { vscode.postMessage({ type: 'page:action', command: btn.getAttribute('data-cmd') }); }
       });
+      document.getElementById('top').addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-wizard]');
+        if (btn) { vscode.postMessage({ type: 'cockpit:wizard', action: btn.getAttribute('data-wizard') }); }
+      });
+      document.getElementById('wizard').addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-wizard]');
+        if (btn && btn.getAttribute('data-wizard') !== 'submit') {
+          vscode.postMessage({ type: 'cockpit:wizard', action: btn.getAttribute('data-wizard') });
+        }
+      });
+      document.getElementById('wizard').addEventListener('submit', (e) => {
+        const form = e.target.closest('form[data-wizard="submit"]');
+        if (!form) { return; }
+        e.preventDefault();
+        const data = {};
+        new FormData(form).forEach((v, k) => { data[k] = String(v); });
+        vscode.postMessage({ type: 'cockpit:wizard', action: 'submit', data });
+      });
       window.addEventListener('message', (e) => {
         const m = e.data;
         if (m && m.type === 'cockpit:state' && m.regions) {
@@ -390,6 +541,7 @@ export function buildCockpitHtml(s: CockpitState, assets: CockpitAssets): string
           document.getElementById('rail').innerHTML = m.regions.rail;
           document.getElementById('main').innerHTML = m.regions.main;
           document.getElementById('drawer').innerHTML = m.regions.drawer;
+          document.getElementById('wizard').innerHTML = m.regions.wizard;
         }
       });
     })();
