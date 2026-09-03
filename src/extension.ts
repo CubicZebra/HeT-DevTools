@@ -14,6 +14,7 @@ import { DiscoveredModule, ModeBInput, ModeBPreview, showTestgenPanel } from './
 import { CoverageState, showCoveragePanel } from './features/coverage/panel';
 import { DocsState, DocToolStatus, showDocsPanel } from './features/docs/panel';
 import { QualityRow, QualityRunResult, showQualityPanel } from './features/quality/panel';
+import { CommitRequest, CommitState, showCommitPanel } from './features/commit/panel';
 import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
 import { DashboardSnapshot } from './features/ui';
@@ -27,6 +28,7 @@ import {
 import { planModuleFiles } from './core/moduleTemplate';
 import { planModuleTests, scanHeader } from './core/testgen';
 import { parseBlueprint, renderContractTest, renderImplementationPlan } from './core/testgenModeB';
+import { composeHeader, defaultEmoji, parsePorcelain, suggestType } from './core/commitAssistant';
 import { applyMetadataPatch, loadMetadata, validateMetadata, hasErrors } from './core/metadataService';
 import { formatConfigForFile, parseClangFormatOutput, parseClangTidyOutput, lintCommitHeader, collectHeaders, QualityIssue } from './core/qualityGates';
 import { pathExists, readText, writeJson, writeText } from './utils/fs';
@@ -89,6 +91,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.coverage', () => openCoveragePanel(context)),
     vscode.commands.registerCommand('het.docs', () => openDocsPanel(context)),
     vscode.commands.registerCommand('het.quality', () => openQualityPanel(context)),
+    vscode.commands.registerCommand('het.commit', () => openCommitPanel(context)),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
@@ -899,6 +902,104 @@ function openQualityPanel(context: vscode.ExtensionContext): void {
       });
     },
   });
+}
+
+/** Commit assistant (G-16): dual-channel conventional commits, preview + confirm. */
+function openCommitPanel(context: vscode.ExtensionContext): void {
+  const gitRun = async (args: string[], cwd: string) => {
+    const git = await which('git');
+    if (!git) {
+      return null;
+    }
+    return run(git, ['-C', cwd, ...args], { cwd });
+  };
+
+  const getState = async (): Promise<CommitState> => {
+    const root = currentProject?.root;
+    if (!root || !currentProject?.metadata) {
+      return { projectName: '', branch: '', changes: [], triggers: {}, buildType: '', triggerTests: false, suggestedType: 'chore', suggestedEmojiId: null };
+    }
+    const meta = await loadMetadata(root);
+    const triggers: Record<string, boolean> = { ...(meta.workflow_triggers ?? {}) };
+    let branch = '';
+    let changes: { path: string; staged: boolean; status: string }[] = [];
+    const st = await gitRun(['status', '--porcelain'], root);
+    if (st) {
+      changes = parsePorcelain(st.stdout);
+      const br = await gitRun(['branch', '--show-current'], root);
+      branch = br ? br.stdout.trim() : '';
+    }
+    const paths = changes.map((c) => c.path);
+    const suggestedType = suggestType(paths);
+    const emoji = defaultEmoji(suggestedType, {
+      triggers,
+      buildType: meta.build_type ?? 'Debug',
+      triggerTests: meta.trigger_tests === true,
+    });
+    return {
+      projectName: currentProject.metadata.name ?? '',
+      branch,
+      changes,
+      triggers,
+      buildType: meta.build_type ?? 'Debug',
+      triggerTests: meta.trigger_tests === true,
+      suggestedType,
+      suggestedEmojiId: emoji?.id ?? null,
+    };
+  };
+
+  const commit = async (req: CommitRequest) => {
+    const root = currentProject?.root;
+    if (!root) {
+      return { ok: false, message: '未检测到 fcpp 项目。' };
+    }
+    if (req.paths.length === 0) {
+      return { ok: false, message: '请至少勾选一个变更文件。' };
+    }
+    if (!req.subject.trim()) {
+      return { ok: false, message: '请填写一句话描述。' };
+    }
+    const header = composeHeader(req.type as never, req.emoji, req.breaking, req.subject);
+    const lint = lintCommitHeader(header);
+    if (!lint.ok) {
+      return { ok: false, message: `commitlint 未通过：${lint.errors.join('；')}` };
+    }
+    const branch = req.push
+      ? await gitRun(['branch', '--show-current'], root).then((r) => (r ? r.stdout.trim() : ''))
+      : '';
+    const pushNote = req.push ? `，然后推送到 ${branch || '当前分支'}` : '（不推送）';
+    const choice = await vscode.window.showWarningMessage(
+      `提交 ${req.paths.length} 个文件？\n\n${header}${pushNote}\n\n（提交助手默认只 commit，推送需显式确认）`,
+      { modal: true },
+      '提交',
+      '取消',
+    );
+    if (choice !== '提交') {
+      return { ok: false, message: '已取消' };
+    }
+    const add = await gitRun(['add', '--', ...req.paths], root);
+    if (!add) {
+      return { ok: false, message: '找不到 git。' };
+    }
+    const c = await gitRun(['commit', '-m', header], root);
+    const out = c ? `${c.stdout}\n${c.stderr}` : '';
+    if (!c || c.code !== 0) {
+      return { ok: false, message: `提交失败（无暂存改动或错误）：\n${out.slice(-800)}` };
+    }
+    if (req.push) {
+      if (!branch) {
+        return { ok: true, message: '已提交，但无法确定分支名，跳过推送。请手动推送。' };
+      }
+      const p = await gitRun(['push', 'origin', branch], root);
+      if (!p || p.code !== 0) {
+        return { ok: false, message: `已提交但推送失败：\n${(p ? `${p.stdout}\n${p.stderr}` : '').slice(-800)}` };
+      }
+    }
+    await refreshStatus();
+    return { ok: true, message: req.push ? `已提交并推送：${header}` : `已提交：${header}` };
+  };
+
+  showCommitPanel(context, { getState, commit });
 }
 
 /** Settings editor (G-17): preview + confirm + backup write of metadata.json. */

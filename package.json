@@ -118,6 +118,10 @@
       {
         "command": "het.quality",
         "title": "HeT DevTools: 质量与安全"
+      },
+      {
+        "command": "het.commit",
+        "title": "HeT DevTools: 提交助手"
       }
     ]
   },
