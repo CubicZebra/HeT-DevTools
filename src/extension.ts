@@ -1,4 +1,5 @@
 import { isAbsolute, join } from 'node:path';
+import { existsSync } from 'node:fs';
 import * as vscode from 'vscode';
 import { EXTENSION_ID, LOG_CHANNEL_NAME, log, setOutputChannel } from './constants';
 import { locateConan, runConanCreate } from './core/conanService';
@@ -327,11 +328,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const tpl = templateSourceForInit();
     const parentDir =
       vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.env.USERPROFILE ?? '';
+    const local = resolveLocalTemplatePath();
     setCockpitWizardInfo({
       templateRepo: tpl.repo ?? TEMPLATE_REPO,
       templateRef: tpl.ref ?? 'HEAD',
-      modeLabel: tpl.mode === 'local' ? `本地副本：${tpl.localPath ?? ''}` : '远程（固定推荐版本）',
+      modeLabel:
+        tpl.mode === 'local' && tpl.localPath
+          ? `本地副本：${tpl.localPath}`
+          : local
+            ? `本地可用：${local}`
+            : '远程（固定推荐版本，需网络）',
       parentDir,
+      localPath: local ?? '',
+      hasLocal: !!local,
     });
     setCockpitWizardFinishHandler(async (draft) => {
       const name = (draft.name ?? '').trim();
@@ -368,6 +377,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         dest,
         confirmed: true,
         metadataExtra,
+        prefer: (draft.source as 'pinned' | 'release' | 'local' | undefined) ?? undefined,
       });
       if (res.ok) {
         void vscode.window.showInformationMessage(res.message);
@@ -2138,12 +2148,31 @@ interface NewProjectOpts {
   confirmed?: boolean;
   /** Extra top-level metadata.json fields to patch on top of name/description. */
   metadataExtra?: Record<string, unknown>;
+  /** V2-4 template-source preference: pinned ref (default) | online latest | local. */
+  prefer?: 'pinned' | 'release' | 'local';
 }
 
 /** Resolve the bootstrap template source (env override wins for dev/offline). */
 function templateSourceForInit(): ReturnType<typeof resolveTemplateSource> {
   const localOverride = process.env.HET_TEMPLATE_LOCAL?.trim() ?? '';
   return resolveTemplateSource(localOverride || undefined);
+}
+
+/**
+ * V2-4 local-template candidate chain:
+ *   HET_TEMPLATE_LOCAL → het.template.localPath → workspace/fcpp (dev copy).
+ */
+function resolveLocalTemplatePath(): string | undefined {
+  const env = process.env.HET_TEMPLATE_LOCAL?.trim() ?? '';
+  if (env) {
+    return env;
+  }
+  const cfg = vscode.workspace.getConfiguration('het').get<string>('template.localPath', '').trim();
+  if (cfg) {
+    return cfg;
+  }
+  const dev = join(contextRef?.extensionUri.fsPath ?? '', 'workspace', 'fcpp');
+  return existsSync(join(dev, 'metadata.json')) ? dev : undefined;
 }
 
 /**
@@ -2170,27 +2199,80 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
     return { ok: false, message: '找不到 git。' };
   }
   const source = templateSourceForInit();
-  const decision = resolveCloneRef(source, 'recommended', { releases: [], tags: [] });
+  const repo = source.repo ?? TEMPLATE_REPO;
+  const localPath = resolveLocalTemplatePath();
+  const envLocal = source.mode === 'local' && !!source.localPath;
+  // Prefer an explicitly configured local copy (maintainer/offline), else pinned.
+  const prefer = opts.prefer ?? (envLocal ? 'local' : 'pinned');
+
   let tplDir = '';
   let markerRef = '';
-  const label = decision.label;
-  if (source.mode === 'local' && source.localPath) {
-    if (!(await pathExists(join(source.localPath, 'metadata.json')))) {
-      return { ok: false, message: `本地模板目录无效：${source.localPath}（缺少 metadata.json）。` };
+  let label = '';
+  let remoteUsed = false;
+  let fallbackNote = '';
+
+  const tryLocal = async (): Promise<boolean> => {
+    if (!localPath) {
+      return false;
     }
-    tplDir = source.localPath;
+    if (!(await pathExists(join(localPath, 'metadata.json')))) {
+      return false;
+    }
+    tplDir = localPath;
     const rev = await run(git, ['-C', tplDir, 'rev-parse', 'HEAD']).catch(() => null);
     markerRef = rev && rev.code === 0 ? rev.stdout.trim() : 'HEAD';
-  } else {
-    // remote path — needs network; degrade cleanly when offline
+    label = `本地模板 ${localPath}`;
+    return true;
+  };
+
+  const tryRemote = async (ref: string | undefined, refLabel: string): Promise<boolean> => {
     const osMod = await import('node:os');
-    const tmp = join(osMod.tmpdir(), `het-tpl-${Date.now()}`);
-    const clone = await run(git, ['clone', '--depth', '1', '--branch', decision.cloneRef, source.repo ?? TEMPLATE_REPO, tmp], { timeoutMs: 120000 });
+    const tmp = join(osMod.tmpdir(), `het-tpl-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    const args = ref ? ['clone', '--depth', '1', '--branch', ref, repo, tmp] : ['clone', '--depth', '1', repo, tmp];
+    const clone = await run(git, args, { timeoutMs: 120000 });
     if (!clone || clone.code !== 0) {
-      return { ok: false, message: `在线克隆失败（${decision.cloneRef}）：${clone ? `${clone.stdout}\n${clone.stderr}`.slice(-300) : '未知错误'}。离线环境请由维护者用 TEMPLATE_LOCAL_PATH/HET_TEMPLATE_LOCAL 指向本地模板副本。` };
+      return false;
     }
     tplDir = tmp;
-    markerRef = decision.cloneRef;
+    markerRef = ref ?? 'HEAD';
+    label = refLabel;
+    remoteUsed = true;
+    return true;
+  };
+
+  if (prefer === 'local') {
+    if (!(await tryLocal())) {
+      return {
+        ok: false,
+        message: `本地模板不可用（${localPath ?? '未配置'}）。请设置 het.template.localPath 或 HET_TEMPLATE_LOCAL 指向含 metadata.json 的模板目录。`,
+      };
+    }
+  } else if (prefer === 'release') {
+    // online latest → pinned → local (each fallback is explicit + recorded)
+    let ok = await tryRemote(undefined, `在线最新（${repo} 默认分支）`);
+    if (!ok) {
+      const pinned = resolveCloneRef(source, 'recommended', { releases: [], tags: [] });
+      ok = await tryRemote(pinned.cloneRef, pinned.label);
+      if (ok) {
+        fallbackNote = '在线最新不可用，已回退到固定哈希版本。';
+      }
+    }
+    if (!ok && (await tryLocal())) {
+      fallbackNote = '在线不可用，已自动回退到本地模板。';
+    }
+    if (!ok) {
+      return { ok: false, message: `在线克隆失败（${repo}）且无本地模板可用。请检查网络或配置本地模板。` };
+    }
+  } else {
+    // pinned (recommended) → local
+    const decision = resolveCloneRef(source, 'recommended', { releases: [], tags: [] });
+    const ok = await tryRemote(decision.cloneRef, decision.label);
+    if (!ok && (await tryLocal())) {
+      fallbackNote = '在线不可用，已自动回退到本地模板。';
+    }
+    if (!ok) {
+      return { ok: false, message: `在线克隆失败（${decision.cloneRef}）且无本地模板可用。请检查网络或配置本地模板。` };
+    }
   }
   if (tplDir === dest) {
     return { ok: false, message: '目标目录不能是模板目录本身。' };
@@ -2211,7 +2293,7 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
   }
 
   // record template ref for T-4.7
-  await writeText(join(dest, markerPath()), encodeMarker({ repo: source.repo ?? TEMPLATE_REPO, ref: markerRef, label }));
+  await writeText(join(dest, markerPath()), encodeMarker({ repo, ref: markerRef, label }));
 
   // rewrite identity fields (preview/confirm happens in the wizard)
   const applied = await applyMetadataPatch(
@@ -2234,11 +2316,12 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
   if (c.code !== 0) {
     return { ok: false, message: `git 基线提交失败：${c.stdout}\n${c.stderr}`.slice(-400) };
   }
-  if (source.repo) {
-    await run(git, ['remote', 'add', 'template', source.repo], { cwd: dest }).catch(() => null);
+  if (remoteUsed) {
+    await run(git, ['remote', 'add', 'template', repo], { cwd: dest }).catch(() => null);
   }
-  log(`[init] project created @ ${dest} (template ${decision.label})`);
-  return { ok: true, message: `已从模板创建项目 ${name} @ ${dest}\n（模板源：${label}，已记录到 .het/template-ref.json）`, root: dest };
+  const suffix = fallbackNote ? `\n${fallbackNote}` : '';
+  log(`[init] project created @ ${dest} (template ${label})${suffix}`);
+  return { ok: true, message: `已从模板创建项目 ${name} @ ${dest}\n（模板源：${label}${suffix}，已记录到 .het/template-ref.json）`, root: dest };
 }
 
 /** User-facing init wizard (G-21): collects identity, preview, confirm, run. */

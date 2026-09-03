@@ -55,6 +55,11 @@
           "type": "boolean",
           "default": false,
           "description": "%config.telemetryEnabled%"
+        },
+        "het.template.localPath": {
+          "type": "string",
+          "default": "",
+          "description": "Local fcpp template directory for offline project init (falls back to HET_TEMPLATE_LOCAL, then workspace/fcpp when present)."
         }
       }
     },

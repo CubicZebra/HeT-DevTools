@@ -23,7 +23,7 @@ const pageHtmlCache = new Map<CockpitPage, string>();
 /** Sequence guard for the post-run auto-collapse timer. */
 let logDoneSeq = 0;
 /** P-G4 wizard host facts + draft accumulator + finish handler. */
-let wizardInfo: CockpitWizardInfo = { templateRepo: '', templateRef: '', modeLabel: '', parentDir: '' };
+let wizardInfo: CockpitWizardInfo = { templateRepo: '', templateRef: '', modeLabel: '', parentDir: '', localPath: '', hasLocal: false };
 let wizardDraft: Record<string, string> = {};
 let wizardFinishHandler: ((draft: Record<string, string>) => Promise<{ ok: boolean; message: string }>) | undefined;
 let cockpitContext: vscode.ExtensionContext | undefined;

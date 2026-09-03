@@ -224,6 +224,9 @@ export interface CockpitWizardInfo {
   templateRef: string;
   modeLabel: string;
   parentDir: string;
+  /** V2-4: resolvable local template path ('' = none) + availability flag. */
+  localPath?: string;
+  hasLocal?: boolean;
 }
 
 const WIZARD_STEPS = ['模板源', '身份', '构建参数', '开关', '确认'];
@@ -251,12 +254,28 @@ export function renderWizardRegion(
   const row = (k: string, v: string): string => `<div class="srow"><span class="sk">${esc(k)}</span><span class="sv">${esc(v)}</span></div>`;
   let body = '';
   if (wizard.step === 1) {
+    const srcOpts = [
+      { v: 'pinned', label: '固定哈希（推荐 · 可复现）', en: 'Pinned ref (recommended)' },
+      { v: 'release', label: '在线最新（默认分支）', en: 'Online latest (default branch)' },
+      { v: 'local', label: '本地模板', en: 'Local template', disabled: !info.hasLocal },
+    ]
+      .map(
+        (o) =>
+          `<option value="${o.v}"${draft.source === o.v ? ' selected' : ''}${o.disabled ? ' disabled' : ''}>${t(lang, o.label, o.en)}</option>`,
+      )
+      .join('');
+    const localLine = info.hasLocal && info.localPath ? t(lang, `本地模板：${info.localPath}`, `Local: ${info.localPath}`) : t(lang, '本地模板：未配置', 'Local template: not configured');
     body = `<div class="slist">
       ${row(t(lang, '模板仓库', 'Template repo'), info.templateRepo)}
       ${row(t(lang, '固定 ref', 'Pinned ref'), info.templateRef)}
       ${row(t(lang, '模板源', 'Source'), info.modeLabel)}
     </div>
-    <div class="status">${t(lang, '新项目将从模板复制骨架 → 改写 metadata.json（name/description）→ git init + 基线提交 → 记录 .het/template-ref.json。', 'Copy the template skeleton → rewrite metadata.json (name/description) → git init + baseline commit → record .het/template-ref.json.')}</div>`;
+    <form data-wizard="submit">
+      <label>${t(lang, '本次使用', 'Use source')}
+        <select name="source">${srcOpts}</select>
+      </label>
+      <div class="status">${localLine} · ${t(lang, '在线不可用时自动回退到本地模板并明确提示（来源记录在 .het/template-ref.json）。', 'Auto-falls back to the local template with a clear notice (source recorded in .het/template-ref.json).')}</div>
+    </form>`;
   } else if (wizard.step === 2) {
     body = `<form data-wizard="submit">
       <label>${t(lang, '项目名（字母/数字/下划线/连字符）', 'Project name (letters/digits/_/-)')}
@@ -297,14 +316,20 @@ export function renderWizardRegion(
     </form>`;
   } else {
     const dest = joinWeb(draft.name ?? 'my-lib', info.parentDir);
+    const srcLabel =
+      draft.source === 'local' && info.hasLocal
+        ? t(lang, '本地模板', 'Local template')
+        : draft.source === 'release'
+          ? t(lang, '在线最新', 'Online latest')
+          : t(lang, '固定哈希', 'Pinned ref');
     body = `<div class="slist">
       ${row(t(lang, '项目名', 'Project'), draft.name ?? '—')}
       ${row(t(lang, '目标目录', 'Destination'), dest)}
-      ${row(t(lang, '模板源', 'Source'), info.modeLabel)}
+      ${row(t(lang, '模板源', 'Source'), `${info.modeLabel} · ${srcLabel}`)}
       ${row(t(lang, '构建参数', 'Build params'), `${draft.buildType ?? 'Debug'} · C++${draft.cppstd ?? '17'}`)}
       ${row(t(lang, 'Python 绑定', 'Python bindings'), draft.pybind === 'yes' ? t(lang, '开启', 'On') : t(lang, '关闭', 'Off'))}
     </div>
-    <div class="status">${t(lang, '确认后将：复制模板 → 改写 metadata.json（备份 .bak）→ git init + 基线提交 → 记录模板 ref。离线环境使用本地模板副本。', 'Will: copy template → rewrite metadata.json (.bak backup) → git init + baseline commit → record template ref. Offline uses the local template copy.')}</div>`;
+    <div class="status">${t(lang, '确认后将：复制模板 → 改写 metadata.json（备份 .bak）→ git init + 基线提交 → 记录模板 ref。离线环境自动回退本地模板副本。', 'Will: copy template → rewrite metadata.json (.bak backup) → git init + baseline commit → record template ref. Offline auto-falls back to the local copy.')}</div>`;
   }
 
   const err = wizard.error ? `<div class="warn">${esc(wizard.error)}</div>` : '';
@@ -510,7 +535,7 @@ export function buildCockpitHtml(
   <nav class="rail" id="rail">${railHtml(s.page)}</nav>
   <main class="main" id="main">${dashboardMainHtml(s, sectionBodies, lang)}</main>
   <div id="drawer">${drawerHtml(s, lang)}</div>
-  <div id="wizard">${renderWizardRegion(s.wizard, wizardInfo ?? { templateRepo: '', templateRef: '', modeLabel: '', parentDir: '' }, wizardDraft ?? {}, lang)}</div>
+  <div id="wizard">${renderWizardRegion(s.wizard, wizardInfo ?? { templateRepo: '', templateRef: '', modeLabel: '', parentDir: '', localPath: '', hasLocal: false }, wizardDraft ?? {}, lang)}</div>
   <script>
     (function () {
       const vscode = acquireVsCodeApi();
