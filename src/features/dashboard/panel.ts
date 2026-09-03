@@ -100,7 +100,7 @@ function buildDashboardHtml(snapshot: DashboardSnapshot): string {
       ${m.generate_modules_inplace ? '<span class="chip">C++23 模块</span>' : ''}</div>
       <div class="sub">${esc(project?.root ?? '')}</div>
       <button onclick="post('het.build')">▶ 构建项目</button>
-      <button class="secondary" onclick="post('het.welcome')">❓ 入门</button>
+      <button class="secondary" onclick="post('het.refresh')">↻ 刷新</button>
     </div>`
     : '<h2>项目</h2><div class="card">未检测到 fcpp 项目 —— 打开含 metadata.json 的库文件夹。</div>';
 

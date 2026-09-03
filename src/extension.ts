@@ -17,7 +17,6 @@ import { QualityRow, QualityRunResult, showQualityPanel } from './features/quali
 import { CommitRequest, CommitState, showCommitPanel } from './features/commit/panel';
 import { ReleaseState, showReleasePanel } from './features/release/panel';
 import { PreflightState, PreflightItem, showPreflightPanel } from './features/preflight/panel';
-import { registerNavView } from './features/navView';
 import { openCockpitPanel, emitCockpitEvent, getCockpitState, setCockpitPageProvider, setCockpitPageHandler, setCockpitWizardInfo, setCockpitWizardFinishHandler } from './features/cockpit/controller';
 import { BenchState, showBenchPanel } from './features/bench/panel';
 import { CiState, CiRunInfo, showCiPanel } from './features/ci/panel';
@@ -25,7 +24,7 @@ import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
 import { DashboardSnapshot } from './features/ui';
 import { registerTestController } from './features/testExplorer/controller';
-import { showWelcomePanel } from './features/welcome/panel';
+import { chipSpec } from './features/statusChip';
 import {
   addDependency,
   listDependencies,
@@ -66,6 +65,9 @@ let lastBuildOk: boolean | undefined;
 let lastConanOutput = '';
 let lastBenchParse: { complete: boolean; cases: [string, string][] } | null = null;
 let wizardAutoOpened = false;
+let lastHealth: { score: number; at: number } | undefined;
+let onboardingNotified = false;
+const isTestHost = process.argv.some((a) => a.includes('--extensionTestsPath'));
 const buildDiagnostics = vscode.languages.createDiagnosticCollection('het-build');
 
 /**
@@ -126,9 +128,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Test Explorer: discover test_package/test/unit GTest cases, run via conan create.
   registerTestController(context, { projectRoot: () => currentProject?.root, run: executeTestRun });
-
-  // Activity-bar quick entry (left icon → cockpit shortcuts).
-  registerNavView(context);
 
   // P-G2: feed cockpit pages with live host data (overview / build-test first).
   setCockpitPageProvider('overview', async () => {
@@ -424,7 +423,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.getCockpitState', () => getCockpitState()),
     vscode.commands.registerCommand('het.refresh', () => refreshStatus()),
     vscode.commands.registerCommand('het.build', () => { track('build'); return buildProject(); }),
-    vscode.commands.registerCommand('het.welcome', () => openWelcome(context)),
     vscode.commands.registerCommand('het.dashboard', () => openDashboard(context)),
     vscode.commands.registerCommand('het.test', () => { track('test'); return runTests(); }),
     vscode.commands.registerCommand('het.showTestResults', () => showStoredTestResults(context)),
@@ -480,12 +478,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(watcher1, watcher2);
   log(`[perf] activate ${Date.now() - startedAt}ms`);
 
-  // First-run onboarding (never inside the automated extension test host).
-  const isTestHost = process.argv.some((a) => a.includes('--extensionTestsPath'));
-  if (!isTestHost && currentProject && !context.workspaceState.get<boolean>('het.welcomeSeen')) {
-    openWelcome(context);
-  }
-
   // @het Chat bridge (T-4.5, optional): intent → matching HeT GUI action.
   try {
     const participant = vscode.chat.createChatParticipant('het.assistant', async (request) => {
@@ -528,14 +520,6 @@ async function buildSnapshot(): Promise<DashboardSnapshot> {
 
 function runHostCommand(command: string): void {
   void vscode.commands.executeCommand(command);
-}
-
-function openWelcome(context: vscode.ExtensionContext): void {
-  showWelcomePanel(context, {
-    getSnapshot: buildSnapshot,
-    runCommand: runHostCommand,
-    onDismiss: () => void context.workspaceState.update('het.welcomeSeen', true),
-  });
 }
 
 function openDashboard(context: vscode.ExtensionContext): void {
@@ -2350,9 +2334,6 @@ function openSettingsPanel(context: vscode.ExtensionContext): void {
 
 /** Detect fcpp projects in the current window and update the status bar. */
 async function refreshStatus(): Promise<void> {
-  if (!statusItem) {
-    return;
-  }
   const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
   const projects = await detectProjectsIn(roots);
   currentProject = projects[0];
@@ -2360,10 +2341,6 @@ async function refreshStatus(): Promise<void> {
   if (currentProject?.metadata) {
     const m = currentProject.metadata;
     emitCockpitEvent({ type: 'project', name: m.name ?? '' });
-    statusItem.text = L('status.project', { name: m.name, version: m.version ?? '0.0.0', buildType: m.build_type ?? '' }).replace(/\s+$/, '');
-    statusItem.tooltip = `HeT DevTools — ${m.name} @ ${currentProject.root}（level: ${currentProject.level}）\n单击构建`;
-    statusItem.command = 'het.build';
-    statusItem.show();
     log(`project detected: ${m.name} (level=${currentProject.level}) @ ${currentProject.root}`);
   } else {
     currentProject = undefined;
@@ -2372,13 +2349,111 @@ async function refreshStatus(): Promise<void> {
       wizardAutoOpened = true;
       emitCockpitEvent({ type: 'wizard:open' });
     }
-    statusItem.text = L('status.noProject');
-    statusItem.tooltip = L('notify.noProject');
-    statusItem.command = undefined;
-    statusItem.show();
     log('no fcpp project in current workspace');
+    await maybeOnboardEmptyWorkspace();
   }
-  void emitTemplateBehind();
+  await emitTemplateBehind();
+  await refreshChip();
+  // Health is comparatively expensive: refresh at most once a minute, lazily.
+  void ensureHealthCached(false);
+}
+
+/** Whether the open workspace folder is truly empty (used for the ＋ hint). */
+async function isWorkspaceEmpty(): Promise<boolean> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) {
+    return false;
+  }
+  const { readdir } = await import('node:fs/promises');
+  for (const f of folders) {
+    try {
+      const entries = await readdir(f.uri.fsPath);
+      if (entries.length > 0) {
+        return false;
+      }
+    } catch {
+      /* unreadable folder treated as non-empty */
+    }
+  }
+  return true;
+}
+
+/** Push the latest model into the single status-bar chip (hide = invisible). */
+async function refreshChip(): Promise<void> {
+  if (!statusItem) {
+    return;
+  }
+  const st = getCockpitState();
+  const spec = chipSpec({
+    projectName: currentProject?.metadata?.name ?? '',
+    workspaceEmpty: await isWorkspaceEmpty(),
+    health: lastHealth?.score ?? null,
+    running: st.top.running,
+    lastBuildOk: lastBuildOk ?? null,
+    test: lastTestSummary
+      ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped }
+      : null,
+    templateBehind: st.top.templateBehind,
+  });
+  if (!spec) {
+    statusItem.hide();
+    return;
+  }
+  statusItem.text = spec.text;
+  statusItem.tooltip = spec.tooltip;
+  statusItem.command = spec.command;
+  statusItem.backgroundColor = spec.color;
+  statusItem.show();
+}
+
+/** Run the full health check when stale (>60 s) and cache the score for the chip. */
+async function ensureHealthCached(force: boolean): Promise<void> {
+  if (!currentProject) {
+    return;
+  }
+  if (!force && lastHealth && Date.now() - lastHealth.at < 60_000) {
+    return;
+  }
+  try {
+    const tools = await detectToolchain();
+    const health = await runHealthCheck({
+      project: currentProject,
+      tools,
+      state: { lastBuildOk, lastTestsOk: lastTestSummary ? lastTestSummary.failed === 0 : undefined },
+    });
+    if (health && typeof health.score === 'number') {
+      lastHealth = { score: health.score, at: Date.now() };
+      emitCockpitEvent({ type: 'health', score: health.score });
+      await refreshChip();
+    }
+  } catch {
+    /* health is best-effort; never breaks anything */
+  }
+}
+
+/** V2-1: a single gentle onboarding notification on an empty workspace. */
+async function maybeOnboardEmptyWorkspace(): Promise<void> {
+  if (onboardingNotified || isTestHost) {
+    return;
+  }
+  if (!(await isWorkspaceEmpty())) {
+    return;
+  }
+  const ctx = contextRef;
+  if (!ctx || ctx.workspaceState.get<boolean>('het.onboard.dismissed')) {
+    return;
+  }
+  onboardingNotified = true;
+  const pick = await vscode.window.showInformationMessage(
+    'HeT DevTools：当前为空工作区。可基于 fcpp 模板初始化一个标准 C/C++ 库工程（构建 / 测试 / 文档 / 发布开箱即用）。',
+    '新建项目',
+    '不再提示',
+  );
+  if (pick === '新建项目') {
+    void vscode.commands.executeCommand('het.newProject');
+  } else if (pick === '不再提示') {
+    void ctx.workspaceState.update('het.onboard.dismissed', true);
+  }
 }
 
 /** P-G3: compute how many commits the recorded template ref is behind (0 = up to date). */
@@ -2477,6 +2552,7 @@ async function buildProject(): Promise<void> {
     const detail = issues.length > 0 ? `${issues.length} 个错误/警告，详见“问题”面板` : '详见“输出 → HeT DevTools”';
     void vscode.window.showErrorMessage(`构建失败：${detail}`);
   }
+  void refreshChip();
 }
 
 /**
@@ -2510,6 +2586,7 @@ async function executeTestRun(): Promise<{ ok: boolean; stdout: string; stderr: 
   log(
     `[test] ok=${result.ok} gtest=${JSON.stringify({ p: lastTestSummary.passed, f: lastTestSummary.failed, s: lastTestSummary.skipped })}`,
   );
+  void refreshChip();
   return result;
 }
 
