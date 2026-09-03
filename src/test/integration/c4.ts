@@ -58,8 +58,30 @@ export async function run(): Promise<void> {
   assert.strictEqual(name, 'mylib2', 'workspace must be the new project');
 
   // 1) template update check → plan file (template advanced by the runner)
+  const markerTxt = readFileSync(join(NEW_PROJECT, '.het', 'template-ref.json'), 'utf8');
+  const markerJson = JSON.parse(markerTxt) as { ref: string };
+  const { execFileSync } = await import('node:child_process');
+  let tplHead = '';
+  try {
+    tplHead = execFileSync('git', ['-C', TPL, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  } catch {
+    /* ignore */
+  }
+  console.log(`[c4] marker.ref=${markerJson.ref.slice(0, 12)} tpl.head=${tplHead.slice(0, 12)}`);
   await vscode.commands.executeCommand('het.templateUpdate');
   const planFile = join(NEW_PROJECT, 'workspace', 'template-sync-plan.md');
+  console.log('[c4] plan exists at ' + planFile + ' => ' + existsSync(planFile));
+  const { readdirSync } = await import('node:fs');
+  const listWorkspace = (dir: string): void => {
+    let names: string[] = [];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    console.log('[c4] workspace/ contains: ' + names.join(', '));
+  };
+  listWorkspace(join(NEW_PROJECT, 'workspace'));
   assert.ok(existsSync(planFile), 'sync plan must be generated when template moved');
   const plan = readFileSync(planFile, 'utf8');
   assert.ok(plan.includes('落后 1 个提交'), 'plan should list exactly one new upstream commit');
