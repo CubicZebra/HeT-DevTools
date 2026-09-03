@@ -329,7 +329,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const tpl = templateSourceForInit();
     const parentDir =
       vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.env.USERPROFILE ?? '';
-    const local = resolveLocalTemplatePath();
+    const local = firstAvailableTemplate();
     setCockpitWizardInfo({
       templateRepo: tpl.repo ?? TEMPLATE_REPO,
       templateRef: tpl.ref ?? 'HEAD',
@@ -337,10 +337,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         tpl.mode === 'local' && tpl.localPath
           ? `本地副本：${tpl.localPath}`
           : local
-            ? `本地可用：${local}`
+            ? `${local.label}${local.path.includes('assets') ? '（离线新建可用）' : ''}`
             : '远程（固定推荐版本，需网络）',
       parentDir,
-      localPath: local ?? '',
+      localPath: local?.path ?? '',
       hasLocal: !!local,
     });
     setCockpitWizardFinishHandler(async (draft) => {
@@ -2165,17 +2165,31 @@ function templateSourceForInit(): ReturnType<typeof resolveTemplateSource> {
  * V2-4 local-template candidate chain:
  *   HET_TEMPLATE_LOCAL → het.template.localPath → workspace/fcpp (dev copy).
  */
-function resolveLocalTemplatePath(): string | undefined {
+/**
+ * V2-4 local-template candidate chain, newest → fallback:
+ *   HET_TEMPLATE_LOCAL → het.template.localPath → workspace/fcpp (dev copy)
+ *   → assets/template (bundled into the vsix, fully offline).
+ */
+function resolveLocalTemplateCandidates(): { path: string; label: string }[] {
+  const out: { path: string; label: string }[] = [];
   const env = process.env.HET_TEMPLATE_LOCAL?.trim() ?? '';
   if (env) {
-    return env;
+    out.push({ path: env, label: `本地模板（HET_TEMPLATE_LOCAL）` });
   }
   const cfg = vscode.workspace.getConfiguration('het').get<string>('template.localPath', '').trim();
   if (cfg) {
-    return cfg;
+    out.push({ path: cfg, label: `本地模板（het.template.localPath）` });
   }
   const dev = join(contextRef?.extensionUri.fsPath ?? '', 'workspace', 'fcpp');
-  return existsSync(join(dev, 'metadata.json')) ? dev : undefined;
+  out.push({ path: dev, label: `workspace/fcpp 开发副本` });
+  const bundled = join(contextRef?.extensionUri.fsPath ?? '', 'assets', 'template');
+  out.push({ path: bundled, label: `内置模板（随扩展发布，离线可用）` });
+  return out;
+}
+
+/** First candidate whose directory actually contains a template. */
+function firstAvailableTemplate(): { path: string; label: string } | undefined {
+  return resolveLocalTemplateCandidates().find((c) => existsSync(join(c.path, 'metadata.json')));
 }
 
 /**
@@ -2203,7 +2217,7 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
   }
   const source = templateSourceForInit();
   const repo = source.repo ?? TEMPLATE_REPO;
-  const localPath = resolveLocalTemplatePath();
+  const localCandidates = resolveLocalTemplateCandidates();
   const envLocal = source.mode === 'local' && !!source.localPath;
   // Prefer an explicitly configured local copy (maintainer/offline), else pinned.
   const prefer = opts.prefer ?? (envLocal ? 'local' : 'pinned');
@@ -2215,17 +2229,17 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
   let fallbackNote = '';
 
   const tryLocal = async (): Promise<boolean> => {
-    if (!localPath) {
-      return false;
+    for (const c of localCandidates) {
+      if (!(await pathExists(join(c.path, 'metadata.json')))) {
+        continue;
+      }
+      tplDir = c.path;
+      const rev = await run(git, ['-C', tplDir, 'rev-parse', 'HEAD']).catch(() => null);
+      markerRef = rev && rev.code === 0 ? rev.stdout.trim() : 'HEAD';
+      label = c.label;
+      return true;
     }
-    if (!(await pathExists(join(localPath, 'metadata.json')))) {
-      return false;
-    }
-    tplDir = localPath;
-    const rev = await run(git, ['-C', tplDir, 'rev-parse', 'HEAD']).catch(() => null);
-    markerRef = rev && rev.code === 0 ? rev.stdout.trim() : 'HEAD';
-    label = `本地模板 ${localPath}`;
-    return true;
+    return false;
   };
 
   const tryRemote = async (ref: string | undefined, refLabel: string): Promise<boolean> => {
@@ -2245,9 +2259,10 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
 
   if (prefer === 'local') {
     if (!(await tryLocal())) {
+      const available = localCandidates.map((c) => c.path).join('；');
       return {
         ok: false,
-        message: `本地模板不可用（${localPath ?? '未配置'}）。请设置 het.template.localPath 或 HET_TEMPLATE_LOCAL 指向含 metadata.json 的模板目录。`,
+        message: `本地模板不可用（${available || '未配置'}）。请设置 het.template.localPath 或 HET_TEMPLATE_LOCAL。`,
       };
     }
   } else if (prefer === 'release') {

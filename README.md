@@ -44,6 +44,10 @@ fcpp 模板用 Conan / CMake / CI / Doxygen / semantic-release 把工程保障�
 - **点击 chip** → 打开仪表盘概览；空工作区时点击直接进入新建项目向导。
 - 其余全部功能藏于命令面板 / QuickPick / `@het` Chat，按需出现、零打扰。
 
+## 离线新建项目（内置模板）
+
+扩展自带 fcpp 模板快照（约 2 MB，打包进 vsix）。即使完全断网，也能在空工作区通过「＋ 新建 fcpp 项目」创建标准工程：在线源不可用时自动回退 内置模板 → workspace/fcpp 开发副本（开发者仓库）→ het.template.localPath → HET_TEMPLATE_LOCAL，降级都会明确提示并写入 .het/template-ref.json。
+
 ## 仪表盘（唯一工作台，可不开）
 
 点击状态栏 HeT chip，或在命令面板执行 `HeT DevTools: 打开仪表盘`（严格单例，重复触发复用不重建）：
