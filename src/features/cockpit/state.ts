@@ -76,11 +76,12 @@ export function reduceCockpit(state: CockpitState, event: CockpitEvent): Cockpit
         drawer: { ...state.drawer, lines: [...state.drawer.lines, event.line].slice(-LOG_CAP) },
       };
     case 'log:done':
+      // Keep the drawer open so the tail of the run stays visible; the
+      // controller collapses it 3 s later (or the user toggles it).
       return {
         ...state,
         top: { ...state.top, running: null },
         lastBuildOk: event.ok,
-        drawer: { ...state.drawer, expanded: false },
       };
     case 'issue:summary':
       return {

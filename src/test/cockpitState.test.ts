@@ -56,12 +56,15 @@ describe('cockpit.state', () => {
     const ignored = reduceCockpit(s0, { type: 'log:append', line: 'stray' });
     assert.deepStrictEqual(ignored.drawer.lines, []);
   });
-  it('log:done stops running, records result and collapses the drawer', () => {
+  it('log:done stops running and records the result, keeping the drawer open for auto-collapse', () => {
     let s = reduceCockpit(s0, { type: 'log:start', title: 'x' });
     s = reduceCockpit(s, { type: 'log:done', ok: true });
     assert.strictEqual(s.top.running, null);
     assert.strictEqual(s.lastBuildOk, true);
-    assert.strictEqual(s.drawer.expanded, false);
+    assert.strictEqual(s.drawer.kind, 'log');
+    assert.strictEqual(s.drawer.expanded, true);
+    const closed = reduceCockpit(s, { type: 'drawer:toggle', expand: false });
+    assert.strictEqual(closed.drawer.expanded, false);
   });
   it('issue:summary >0 opens the issues drawer; 0 closes it', () => {
     const s = reduceCockpit(s0, { type: 'issue:summary', count: 3 });
@@ -137,23 +140,55 @@ describe('cockpit.render', () => {
   });
 
   it('renders placeholder for pages without adapters yet', () => {
-    const html = buildPageContentHtml('deps', undefined);
-    assert.ok(html.includes('P-G2 将在此接入「依赖」'));
+    const html = buildPageContentHtml('commit', undefined);
+    assert.ok(html.includes('P-G2 将在此接入「提交」'));
   });
 
   it('renders summary pages: text rows without icons, primary buttons with icons', () => {
-    const html = buildPageContentHtml('deps', {
+    const html = buildPageContentHtml('release', {
       rows: [
-        ['common', '2 个'],
-        ['cpp', '3 个'],
+        ['release 开关', '✓ 已开启'],
+        ['build_type', 'Release'],
       ],
-      actions: [{ cmd: 'het.openDeps', icon: 'package', label: '管理依赖' }],
+      actions: [{ cmd: 'het.release', icon: 'rocket', label: '发布中心' }],
     });
-    assert.ok(html.includes('common'));
-    assert.ok(html.includes('2 个'));
-    assert.ok(html.includes('data-cmd="het.openDeps"'));
-    assert.ok(html.includes('codicon-package'));
+    assert.ok(html.includes('release 开关'));
+    assert.ok(html.includes('✓ 已开启'));
+    assert.ok(html.includes('data-cmd="het.release"'));
+    assert.ok(html.includes('codicon-rocket'));
     // sub-rows carry no icon markup
-    assert.ok(!/codicon/.test(html.split('data-cmd="het.openDeps"')[0].split('common')[1] ?? ''));
+    assert.ok(!/codicon/.test(html.split('data-cmd="het.release"')[0].split('release 开关')[1] ?? ''));
+  });
+
+  it('renders the deps deep form: grouped rows, remove actions and an add form', () => {
+    const html = buildPageContentHtml('deps', {
+      items: [
+        { bucket: 'common', displayKey: 'ZLIB', conanName: 'zlib', version: '1.3.1', targets: ['etl', 'net'] },
+        { bucket: 'cpp', displayKey: 'Eigen3', conanName: 'eigen', targets: [] },
+      ],
+      issues: [],
+    });
+    assert.ok(html.includes('公共 (common)'));
+    assert.ok(html.includes('<b>ZLIB</b>'));
+    assert.ok(html.includes('zlib@1.3.1'));
+    assert.ok(html.includes('data-page-action="deps:remove"'));
+    assert.ok(html.includes('data-arg-bucket="common"'));
+    assert.ok(html.includes('data-arg-key="ZLIB"'));
+    assert.ok(html.includes('data-action="deps:add"'));
+    assert.ok(html.includes('name="conanName"'));
+    assert.ok(html.includes('codicon-add'));
+  });
+
+  it('renders the bench page: platform row, paste form and parse result table', () => {
+    const html = buildPageContentHtml('bench', {
+      platform: 'Cortex-M 裸机',
+      parsed: { complete: true, cases: [['matmul_4x4', '12345']] },
+    });
+    assert.ok(html.includes('Cortex-M 裸机'));
+    assert.ok(html.includes('data-action="bench:parse"'));
+    assert.ok(html.includes('name="text"'));
+    assert.ok(html.includes('matmul_4x4'));
+    assert.ok(html.includes('12345'));
+    assert.ok(html.includes('✓ 协议完整'));
   });
 });

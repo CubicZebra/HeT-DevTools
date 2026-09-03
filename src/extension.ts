@@ -18,7 +18,7 @@ import { CommitRequest, CommitState, showCommitPanel } from './features/commit/p
 import { ReleaseState, showReleasePanel } from './features/release/panel';
 import { PreflightState, PreflightItem, showPreflightPanel } from './features/preflight/panel';
 import { registerNavView } from './features/navView';
-import { openCockpitPanel, emitCockpitEvent, getCockpitState, setCockpitPageProvider } from './features/cockpit/controller';
+import { openCockpitPanel, emitCockpitEvent, getCockpitState, setCockpitPageProvider, setCockpitPageHandler } from './features/cockpit/controller';
 import { BenchState, showBenchPanel } from './features/bench/panel';
 import { CiState, CiRunInfo, showCiPanel } from './features/ci/panel';
 import { showSettingsPanel } from './features/settings/panel';
@@ -30,6 +30,7 @@ import {
   addDependency,
   listDependencies,
   removeDependency,
+  DepBucket,
 } from './core/dependencyService';
 import { planModuleFiles } from './core/moduleTemplate';
 import { planModuleTests, scanHeader } from './core/testgen';
@@ -63,6 +64,7 @@ let activationLine = '';
 let lastTestSummary: GTestRunSummary | undefined;
 let lastBuildOk: boolean | undefined;
 let lastConanOutput = '';
+let lastBenchParse: { complete: boolean; cases: [string, string][] } | null = null;
 const buildDiagnostics = vscode.languages.createDiagnosticCollection('het-build');
 
 /**
@@ -167,7 +169,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   setCockpitPageProvider('deps', async () => {
     const root = rootOf();
     if (!root) {
-      return { rows: [] as [string, string][], actions: [{ cmd: 'het.openDeps', icon: 'package', label: '管理依赖' }], note: '未检测到项目' };
+      return { items: [], issues: ['未检测到项目'] };
     }
     let ct = '';
     try {
@@ -176,13 +178,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       /* missing */
     }
     const views = listDependencies(await loadMetadata(root), ct);
-    const count = new Map<string, number>();
-    for (const v of views) {
-      count.set(v.bucket, (count.get(v.bucket) ?? 0) + 1);
-    }
     return {
-      rows: (['common', 'c', 'cpp', 'infra'] as const).map((b) => [b, `${count.get(b) ?? 0} 个`] as [string, string]),
-      actions: [{ cmd: 'het.openDeps', icon: 'package', label: '管理依赖' }],
+      items: views.map((v) => ({
+        bucket: v.bucket,
+        displayKey: v.displayKey,
+        conanName: v.conanName,
+        version: v.version,
+        targets: v.targets,
+      })),
+      issues: [],
     };
   });
 
@@ -285,10 +289,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }
     return {
-      rows: [['当前平台配置', platform]],
-      actions: [{ cmd: 'het.benchmark', icon: 'chip', label: '上板测试' }],
+      platform,
+      parsed: lastBenchParse,
       note: '无硬件可“只构建（--no-flash）”或粘贴模拟串口输出解析。',
     };
+  });
+
+  // P-G2 deep forms: interactive page actions inside the cockpit.
+  setCockpitPageHandler('deps', async (action, data) => {
+    const svc = createDepsService();
+    if (action === 'deps:add') {
+      const res = await svc.add({
+        conanName: (data.conanName ?? '').trim(),
+        version: (data.version ?? '').trim(),
+        bucket: data.bucket as DepBucket,
+        targets: data.targets,
+      });
+      void vscode.window.showInformationMessage(res.message);
+      return;
+    }
+    if (action === 'deps:remove') {
+      const res = await svc.remove(data.bucket, data.key);
+      void vscode.window.showInformationMessage(res.message);
+    }
+  });
+  setCockpitPageHandler('bench', async (action, data) => {
+    if (action === 'bench:parse') {
+      const parsed = parseBenchmarkProtocol(data.text ?? '');
+      lastBenchParse = { complete: parsed.complete, cases: parsed.cases.map((c) => [c.name, String(c.value)] as [string, string]) };
+    }
   });
 
   setCockpitPageProvider('collab', async () => {
@@ -360,7 +389,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.patent', () => runPatentWizard()),
     vscode.commands.registerCommand('het.newProject', () => runNewProjectWizard()),
     vscode.commands.registerCommand('het.newProjectDirect', (opts: NewProjectOpts) => newProjectFromTemplate(opts)),
-    vscode.commands.registerCommand('het.templateUpdate', () => runTemplateUpdateCheck()),
+    vscode.commands.registerCommand('het.templateUpdate', async () => {
+      await runTemplateUpdateCheck();
+      void emitTemplateBehind();
+    }),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
@@ -453,8 +485,13 @@ function openDashboard(context: vscode.ExtensionContext): void {
   showDashboardPanel(context, { getSnapshot: buildSnapshot, runCommand: runHostCommand });
 }
 
-/** Dependency manager (G-07): list + add/remove with preview & dual-file write. */
-function openDepsPanel(context: vscode.ExtensionContext): void {
+/** Dependency manager (G-07): list + add/remove with preview & dual-file write.
+ *  Shared by the deps panel and the cockpit deps deep form. */
+function createDepsService(): {
+  getState: () => Promise<{ views: ReturnType<typeof listDependencies>; issues: string[] }>;
+  add: (input: DepAddInput) => Promise<{ ok: boolean; message: string }>;
+  remove: (bucket: string, displayKey: string) => Promise<{ ok: boolean; message: string }>;
+} {
   const loadPair = async (): Promise<{ metadata: FcppMetadata; conandata: string }> => {
     const root = currentProject?.root;
     if (!root) {
@@ -479,13 +516,10 @@ function openDepsPanel(context: vscode.ExtensionContext): void {
     await writeJson(join(root, 'metadata.json'), metadata, { backup: true });
   };
 
-  showDepsPanel(context, {
+  return {
     getState: async () => {
       const { metadata, conandata } = await loadPair();
-      return {
-        views: listDependencies(metadata, conandata),
-        issues: [],
-      };
+      return { views: listDependencies(metadata, conandata), issues: [] };
     },
     add: async (input: DepAddInput) => {
       const { metadata, conandata } = await loadPair();
@@ -528,6 +562,15 @@ function openDepsPanel(context: vscode.ExtensionContext): void {
       await refreshStatus();
       return { ok: true, message: `已移除 ${displayKey}` };
     },
+  };
+}
+
+function openDepsPanel(context: vscode.ExtensionContext): void {
+  const svc = createDepsService();
+  showDepsPanel(context, {
+    getState: svc.getState,
+    add: svc.add,
+    remove: svc.remove,
     refresh: async () => {
       await refreshStatus();
     },
@@ -2267,6 +2310,37 @@ async function refreshStatus(): Promise<void> {
     statusItem.command = undefined;
     statusItem.show();
     log('no fcpp project in current workspace');
+  }
+  void emitTemplateBehind();
+}
+
+/** P-G3: compute how many commits the recorded template ref is behind (0 = up to date). */
+async function emitTemplateBehind(): Promise<void> {
+  const root = currentProject?.root;
+  if (!root) {
+    emitCockpitEvent({ type: 'template:update', behind: 0 });
+    return;
+  }
+  try {
+    const markerFile = join(root, markerPath());
+    if (!(await pathExists(markerFile))) {
+      emitCockpitEvent({ type: 'template:update', behind: 0 });
+      return;
+    }
+    const marker = parseMarker(await readText(markerFile));
+    const source = templateSourceForInit();
+    if (!marker?.ref || source.mode !== 'local' || !source.localPath) {
+      emitCockpitEvent({ type: 'template:update', behind: 0 });
+      return;
+    }
+    const git = await which('git');
+    if (!git) {
+      return;
+    }
+    const r = await run(git, ['-C', source.localPath, 'rev-list', '--count', `${marker.ref}..HEAD`]);
+    emitCockpitEvent({ type: 'template:update', behind: r.code === 0 ? Number(r.stdout.trim()) || 0 : 0 });
+  } catch {
+    emitCockpitEvent({ type: 'template:update', behind: 0 });
   }
 }
 

@@ -15,8 +15,12 @@ let cockpitState: CockpitState = initialCockpitState();
 
 /** Page → payload provider (P-G2 adapters; registered by the extension host). */
 const pageProviders = new Map<CockpitPage, () => Promise<PagePayload>>();
+/** Page → interactive action handler (P-G2 deep forms; page:action messages). */
+const pageHandlers = new Map<CockpitPage, (action: string, data: Record<string, string>) => Promise<void>>();
 /** Cached rendered main-region HTML per page. */
 const pageHtmlCache = new Map<CockpitPage, string>();
+/** Sequence guard for the post-run auto-collapse timer. */
+let logDoneSeq = 0;
 
 export function getCockpitState(): CockpitState {
   return cockpitState;
@@ -25,6 +29,14 @@ export function getCockpitState(): CockpitState {
 /** Register a page data provider (host adapters feed cockpit pages). */
 export function setCockpitPageProvider(page: CockpitPage, provider: () => Promise<PagePayload>): void {
   pageProviders.set(page, provider);
+}
+
+/** Register a page action handler (deep forms post `cockpit:page:action`). */
+export function setCockpitPageHandler(
+  page: CockpitPage,
+  handler: (action: string, data: Record<string, string>) => Promise<void>,
+): void {
+  pageHandlers.set(page, handler);
 }
 
 function postState(): void {
@@ -56,6 +68,21 @@ async function loadPage(page: CockpitPage): Promise<void> {
 /** Feed a host-side event into the cockpit (no-op when the cockpit is closed). */
 export function emitCockpitEvent(event: CockpitEvent): void {
   cockpitState = reduceCockpit(cockpitState, event);
+  if (event.type === 'log:done') {
+    const seq = ++logDoneSeq;
+    setTimeout(() => {
+      if (
+        cockpitPanel &&
+        seq === logDoneSeq &&
+        cockpitState.top.running === null &&
+        cockpitState.drawer.kind === 'log' &&
+        cockpitState.drawer.expanded
+      ) {
+        cockpitState = reduceCockpit(cockpitState, { type: 'drawer:toggle', expand: false });
+        postState();
+      }
+    }, 3000);
+  }
   postState();
 }
 
@@ -77,7 +104,7 @@ export function openCockpitPanel(context: vscode.ExtensionContext): vscode.Webvi
   };
   cockpitPanel.webview.html = buildCockpitHtml(cockpitState, assets);
 
-  cockpitPanel.webview.onDidReceiveMessage((message: { type: string; page?: string; expand?: boolean; command?: string }) => {
+  cockpitPanel.webview.onDidReceiveMessage((message: { type: string; page?: string; expand?: boolean; command?: string; action?: string; data?: Record<string, string> }) => {
     if (message.type === 'cockpit:navigate' && message.page && isCockpitPage(message.page)) {
       cockpitState = reduceCockpit(cockpitState, { type: 'navigate', page: message.page });
       postState();
@@ -87,6 +114,19 @@ export function openCockpitPanel(context: vscode.ExtensionContext): vscode.Webvi
       postState();
     } else if (message.type === 'page:action' && message.command) {
       void vscode.commands.executeCommand(message.command);
+    } else if (message.type === 'cockpit:page:action' && message.action) {
+      const handler = pageHandlers.get(cockpitState.page);
+      const page = cockpitState.page;
+      void (async () => {
+        if (handler) {
+          try {
+            await handler(message.action as string, message.data ?? {});
+          } catch {
+            /* handler surfaces its own messaging */
+          }
+        }
+        await loadPage(page);
+      })();
     }
   });
 

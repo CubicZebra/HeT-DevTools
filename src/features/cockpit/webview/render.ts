@@ -43,7 +43,33 @@ export interface BuildTestPayload {
   lastTest: TestSummaryPayload | null;
 }
 
-export type PagePayload = OverviewPayload | BuildTestPayload | SummaryPayload | Record<string, unknown> | undefined;
+export interface DepItemView {
+  bucket: string;
+  displayKey: string;
+  conanName: string;
+  version?: string;
+  targets: string[];
+}
+
+export interface DepsPayload {
+  items: DepItemView[];
+  issues: string[];
+}
+
+export interface BenchPayload {
+  platform: string;
+  parsed: { complete: boolean; cases: [string, string][] } | null;
+  note?: string;
+}
+
+export type PagePayload =
+  | OverviewPayload
+  | BuildTestPayload
+  | DepsPayload
+  | BenchPayload
+  | SummaryPayload
+  | Record<string, unknown>
+  | undefined;
 
 export interface SummaryAction {
   cmd: string;
@@ -100,7 +126,60 @@ function buildTestContent(p: BuildTestPayload): string {
       <button class="primary" data-cmd="het.test"><i class="codicon codicon-beaker"></i>构建并测试</button>
       <button data-cmd="het.showTestResults">查看测试结果</button>
     </div>
-    <div class="placeholder">构建日志将自动出现在底部抽屉（运行中自动展开）。</div>`;
+    <div class="placeholder">构建日志将自动出现在底部抽屉（运行中自动展开，完成后 3 秒收起）。</div>`;
+}
+
+const BUCKET_LABELS: Record<string, string> = {
+  common: '公共 (common)',
+  c: 'C (c)',
+  cpp: 'C++ (cpp)',
+  infra: '基础设施 (infra)',
+};
+
+function depsContent(p: DepsPayload): string {
+  const items = p.items.length
+    ? p.items
+        .map(
+          (i) => `<div class="drow">
+      <span class="dk">${esc(BUCKET_LABELS[i.bucket] ?? i.bucket)}</span>
+      <span class="dv"><b>${esc(i.displayKey)}</b><span class="dim"> ${esc(i.conanName)}${i.version ? '@' + esc(i.version) : ''}</span></span>
+      <span class="dv dim">${esc(i.targets.join(', ') || '—')}</span>
+      <button class="textbtn" data-page-action="deps:remove" data-arg-bucket="${esc(i.bucket)}" data-arg-key="${esc(i.displayKey)}">移除</button>
+    </div>`,
+        )
+        .join('')
+    : '<div class="status">（暂无依赖）</div>';
+  const bucketOptions = Object.entries(BUCKET_LABELS).map(([k, label]) => `<option value="${k}">${esc(label)}</option>`).join('');
+  return `<div class="slist">${items}</div>
+    ${p.issues.length ? `<div class="warn">${p.issues.map((x) => esc(x)).join('<br>')}</div>` : ''}
+    <form class="addform" data-action="deps:add">
+      <input name="conanName" placeholder="conan 包名（如 zlib）" required>
+      <input name="version" placeholder="版本（如 1.3.1）" required>
+      <input name="targets" placeholder="目标（逗号分隔，可空）">
+      <select name="bucket">${bucketOptions}</select>
+      <button class="primary" type="submit"><i class="codicon codicon-add"></i>添加依赖</button>
+    </form>
+    <div class="status">增删均先弹窗确认，随后原子写入 conandata.yml 与 metadata.json。</div>`;
+}
+
+function benchContent(p: BenchPayload): string {
+  const table = p.parsed
+    ? `<div class="slist">${
+        p.parsed.cases.length
+          ? p.parsed.cases
+              .map(([n, v]) => `<div class="srow"><span class="sk">${esc(n)}</span><span class="sv">${esc(v)}</span></div>`)
+              .join('')
+          : '<div class="status">未解析到 RESULT 行</div>'
+      }
+      <div class="status">${p.parsed.complete ? '✓ 协议完整（START/END 齐全）' : '✗ 协议不完整（缺少 START/END）'}</div></div>`
+    : '';
+  return `<div class="row"><span class="status">平台：${esc(p.platform)}</span></div>
+    <form data-action="bench:parse">
+      <textarea name="text" rows="8" placeholder="粘贴模拟串口输出，如：&#10;BENCHMARK_START&#10;RESULT|matmul_4x4|12345&#10;BENCHMARK_END"></textarea>
+      <button class="primary" type="submit"><i class="codicon codicon-chrome-maximize"></i>解析协议输出</button>
+    </form>
+    ${table}
+    ${p.note ? `<div class="status">${esc(p.note)}</div>` : ''}`;
 }
 
 /** Render the full main-region HTML for a page with its payload (P-G2). */
@@ -112,6 +191,12 @@ export function buildPageContentHtml(page: CockpitPage, payload: PagePayload): s
   }
   if (page === 'buildTest') {
     return `<section class="page">${head}${buildTestContent(payload as BuildTestPayload)}</section>`;
+  }
+  if (page === 'deps') {
+    return `<section class="page">${head}${depsContent((payload as DepsPayload) ?? { items: [], issues: [] })}</section>`;
+  }
+  if (page === 'bench') {
+    return `<section class="page">${head}${benchContent((payload as BenchPayload) ?? { platform: '未检测', parsed: null })}</section>`;
   }
   if (payload && typeof payload === 'object' && 'rows' in payload && 'actions' in payload) {
     return `<section class="page">${head}${summaryContent(payload as SummaryPayload)}</section>`;
@@ -234,6 +319,20 @@ export function buildCockpitHtml(s: CockpitState, assets: CockpitAssets): string
   .srow { display: flex; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--vscode-widget-border,#2b2b2b); font-size: 12px; }
   .srow .sk { width: 130px; opacity: .75; flex-shrink: 0; }
   .srow .sv { flex: 1; }
+  .drow { display: flex; gap: 12px; align-items: center; padding: 4px 0;
+    border-bottom: 1px solid var(--vscode-widget-border,#2b2b2b); font-size: 12px; }
+  .drow .dk { width: 120px; opacity: .75; flex-shrink: 0; }
+  .drow .dv { flex: 1; }
+  .dim { opacity: .65; }
+  button.textbtn { background: none; border: none; color: var(--vscode-textLink-foreground);
+    cursor: pointer; font-size: 12px; padding: 0; }
+  .addform { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+  .addform input, .addform select { background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border,#555); border-radius: 4px; padding: 5px 8px; font-size: 12px; min-width: 120px; }
+  textarea { width: 100%; max-width: 640px; box-sizing: border-box; background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border,#555); border-radius: 4px;
+    padding: 6px 8px; font-family: var(--vscode-editor-font-family); font-size: 12px; }
+  form[data-action] { margin: 10px 0; }
   .card { border: 1px solid var(--vscode-widget-border,#333); border-radius: 8px;
     padding: 10px 14px; background: var(--vscode-editorWidget-background); min-width: 160px; }
   .card .ct { font-size: 11px; opacity: .7; }
@@ -261,7 +360,23 @@ export function buildCockpitHtml(s: CockpitState, assets: CockpitAssets): string
       });
       document.getElementById('main').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-cmd]');
-        if (btn) { vscode.postMessage({ type: 'page:action', command: btn.getAttribute('data-cmd') }); }
+        if (btn) { vscode.postMessage({ type: 'page:action', command: btn.getAttribute('data-cmd') }); return; }
+        const pa = e.target.closest('[data-page-action]');
+        if (pa) {
+          const data = {};
+          for (const a of pa.attributes) {
+            if (a.name.indexOf('data-arg-') === 0) { data[a.name.slice('data-arg-'.length)] = a.value; }
+          }
+          vscode.postMessage({ type: 'cockpit:page:action', action: pa.getAttribute('data-page-action'), data });
+        }
+      });
+      document.getElementById('main').addEventListener('submit', (e) => {
+        const form = e.target.closest('form[data-action]');
+        if (!form) { return; }
+        e.preventDefault();
+        const data = {};
+        new FormData(form).forEach((v, k) => { data[k] = String(v); });
+        vscode.postMessage({ type: 'cockpit:page:action', action: form.getAttribute('data-action'), data });
       });
       document.getElementById('drawer').addEventListener('click', (e) => {
         if (e.target.closest('[data-toggle="drawer"]')) { vscode.postMessage({ type: 'drawer:toggle', expand: !document.getElementById('drawer').firstElementChild.classList.contains('expanded') }); }
