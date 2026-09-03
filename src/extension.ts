@@ -10,7 +10,7 @@ import { detectToolchain } from './core/toolchainDetector';
 import { showDashboardPanel } from './features/dashboard/panel';
 import { showDepsPanel, DepAddInput } from './features/deps/panel';
 import { ModulePanelInput, showModuleWizardPanel } from './features/moduleWizard/panel';
-import { DiscoveredModule, showTestgenPanel } from './features/testgen/panel';
+import { DiscoveredModule, ModeBInput, ModeBPreview, showTestgenPanel } from './features/testgen/panel';
 import { CoverageState, showCoveragePanel } from './features/coverage/panel';
 import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
@@ -24,6 +24,7 @@ import {
 } from './core/dependencyService';
 import { planModuleFiles } from './core/moduleTemplate';
 import { planModuleTests, scanHeader } from './core/testgen';
+import { parseBlueprint, renderContractTest, renderImplementationPlan } from './core/testgenModeB';
 import { applyMetadataPatch, loadMetadata } from './core/metadataService';
 import { pathExists, readText, writeJson, writeText } from './utils/fs';
 import { FcppMetadata, FcppProject, ParsedIssue } from './types';
@@ -315,6 +316,64 @@ function openTestgenPanel(context: vscode.ExtensionContext): void {
     return { ok: true, message: `已创建 ${plan.relPath}。可运行「构建并测试」验证。` };
   };
 
+  const modeBPlan = (input: ModeBInput): { ok: boolean; issues: string[]; testRelPath: string; planRelPath: string; testContent: string; planContent: string; contractCount: number } | null => {
+    const name = input.moduleName.trim().toLowerCase();
+    if (!/^[a-z][a-z0-9_]*$/.test(name)) {
+      return { ok: false, issues: ['模块名须为小写标识符（字母开头，仅 a-z/0-9/_）'], testRelPath: '', planRelPath: '', testContent: '', planContent: '', contractCount: 0 };
+    }
+    const parsed = parseBlueprint(input.blueprint);
+    if (!parsed.ok) {
+      return { ok: false, issues: parsed.issues, testRelPath: '', planRelPath: '', testContent: '', planContent: '', contractCount: 0 };
+    }
+    const title = input.title.trim() || `${name} 蓝图`;
+    const notes = [`Blueprint: ${title}`, 'Test-first: implement until these contract cases go green.'];
+    const testRelPath = `test_package/test/unit/${name}_contract_test.cpp`;
+    const planRelPath = `workspace/${name}-blueprint-plan.md`;
+    return {
+      ok: true,
+      issues: [],
+      testRelPath,
+      planRelPath,
+      testContent: renderContractTest(name, parsed.contracts, notes),
+      planContent: renderImplementationPlan(name, 'src', parsed.contracts, title),
+      contractCount: parsed.contracts.length,
+    };
+  };
+
+  const createModeB = async (input: ModeBInput) => {
+    const root = currentProject?.root;
+    if (!root) {
+      return { ok: false, message: '未检测到 fcpp 项目。' };
+    }
+    const plan = modeBPlan(input);
+    if (!plan || !plan.ok) {
+      return { ok: false, message: `无法生成：${plan?.issues.join('；') ?? '输入无效'}` };
+    }
+    const existing = [plan.testRelPath, plan.planRelPath].filter((p) => p !== '');
+    const hits: string[] = [];
+    for (const p of existing) {
+      if (await pathExists(join(root, p))) {
+        hits.push(p);
+      }
+    }
+    if (hits.length > 0) {
+      return { ok: false, message: `以下文件已存在，请先删除或改名：${hits.join('、')}` };
+    }
+    const choice = await vscode.window.showWarningMessage(
+      `写入契约测试与实现计划？\n  ${plan.testRelPath}\n  ${plan.planRelPath}\nMode B 不创建 include/src（按计划另行实现）。`,
+      { modal: true },
+      '写入',
+      '取消',
+    );
+    if (choice !== '写入') {
+      return { ok: false, message: '已取消' };
+    }
+    await writeText(join(root, plan.testRelPath), plan.testContent);
+    await writeText(join(root, plan.planRelPath), plan.planContent);
+    await refreshStatus();
+    return { ok: true, message: `已生成契约测试与实现计划。按计划实现模块后运行「构建并测试」使契约转绿。` };
+  };
+
   showTestgenPanel(context, {
     listModules,
     preview: (m) => {
@@ -322,6 +381,15 @@ function openTestgenPanel(context: vscode.ExtensionContext): void {
       return root ? planModuleTests(root, m) : Promise.resolve({ ok: false, issues: ['未检测到 fcpp 项目'], relPath: '', content: '' });
     },
     create,
+    planModeB: (input) => {
+      const plan = modeBPlan(input);
+      return Promise.resolve(
+        plan
+          ? (plan as ModeBPreview)
+          : { ok: false, issues: ['输入无效'], testRelPath: '', planRelPath: '', testContent: '', planContent: '', contractCount: 0 },
+      );
+    },
+    createModeB,
   });
 }
 
