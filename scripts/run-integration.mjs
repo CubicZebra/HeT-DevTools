@@ -1,5 +1,6 @@
-// Runs the extension-host integration smoke test against the locally installed
-// VS Code (no download). Usage: node scripts/run-integration.mjs
+// Runs the extension-host integration smoke test.
+// Local VS Code when available; otherwise downloads the version from
+// VSCODE_VERSION (used by CI). Usage: node scripts/run-integration.mjs
 import { runTests } from '@vscode/test-electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -17,12 +18,17 @@ const candidates = [
 const vscodeExecutablePath = candidates.find((p) => p && existsSync(p));
 
 async function main() {
-  await runTests({
-    vscodeExecutablePath,
+  const opts = {
     extensionDevelopmentPath: root,
     extensionTestsPath: join(root, 'out', 'test-integration', 'index.js'),
     launchArgs: [fixture],
-  });
+  };
+  if (vscodeExecutablePath) {
+    opts.vscodeExecutablePath = vscodeExecutablePath;
+  } else if (!process.env.VSCODE_VERSION) {
+    throw new Error('no local VS Code found and VSCODE_VERSION not set');
+  }
+  await runTests(opts);
   console.log('[integration-smoke] host exited cleanly');
 }
 

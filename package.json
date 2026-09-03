@@ -1,7 +1,7 @@
 {
   "name": "het-devtools",
-  "displayName": "HeT DevTools",
-  "description": "C/C++ 工程面板（面向 fcpp 模板库）：构建、测试、依赖、文档、质量门禁、发布与上板基准一键可视化。A plain-language engineering cockpit for fcpp-based C/C++ libraries.",
+  "displayName": "%displayName%",
+  "description": "%description%",
   "version": "0.1.0",
   "publisher": "het-fti",
   "license": "Apache-2.0",
@@ -46,7 +46,12 @@
           "type": "array",
           "items": { "type": "string" },
           "default": [],
-          "description": "Extra Conan -pr profile files appended to every build (maintainer/dev-machine adaptations; not shipped defaults)."
+          "description": "%config.conanProfiles%"
+        },
+        "het.telemetry.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.telemetryEnabled%"
         }
       }
     },
@@ -57,107 +62,115 @@
       },
       {
         "command": "het.refresh",
-        "title": "HeT DevTools: 重新检测项目"
+        "title": "%cmd.refresh%"
       },
       {
         "command": "het.build",
-        "title": "HeT DevTools: 构建项目"
+        "title": "%cmd.build%"
       },
       {
         "command": "het.welcome",
-        "title": "HeT DevTools: 入门向导"
+        "title": "%cmd.welcome%"
       },
       {
         "command": "het.dashboard",
-        "title": "HeT DevTools: 打开驾驶舱"
+        "title": "%cmd.dashboard%"
       },
       {
         "command": "het.healthCheck",
-        "title": "HeT DevTools: 项目体检（驾驶舱）"
+        "title": "%cmd.healthCheck%"
       },
       {
         "command": "het.test",
-        "title": "HeT DevTools: 构建并测试"
+        "title": "%cmd.test%"
       },
       {
         "command": "het.showTestResults",
-        "title": "HeT DevTools: 查看测试结果"
+        "title": "%cmd.showTestResults%"
       },
       {
         "command": "het.openSettings",
-        "title": "HeT DevTools: 项目设置（metadata.json）"
+        "title": "%cmd.openSettings%"
       },
       {
         "command": "het.openDeps",
-        "title": "HeT DevTools: 依赖管理器"
+        "title": "%cmd.openDeps%"
       },
       {
         "command": "het.addDependency",
-        "title": "HeT DevTools: 添加依赖"
+        "title": "%cmd.addDependency%"
       },
       {
         "command": "het.newModule",
-        "title": "HeT DevTools: 新增模块"
+        "title": "%cmd.newModule%"
       },
       {
         "command": "het.generateTests",
-        "title": "HeT DevTools: 生成测试（模式 A）"
+        "title": "%cmd.generateTests%"
       },
       {
         "command": "het.refreshTests",
-        "title": "HeT DevTools: 刷新测试浏览器"
+        "title": "%cmd.refreshTests%"
       },
       {
         "command": "het.coverage",
-        "title": "HeT DevTools: 覆盖率视图"
+        "title": "%cmd.coverage%"
       },
       {
         "command": "het.docs",
-        "title": "HeT DevTools: 文档中心"
+        "title": "%cmd.docs%"
       },
       {
         "command": "het.quality",
-        "title": "HeT DevTools: 质量与安全"
+        "title": "%cmd.quality%"
       },
       {
         "command": "het.commit",
-        "title": "HeT DevTools: 提交助手"
+        "title": "%cmd.commit%"
       },
       {
         "command": "het.commitRelease",
-        "title": "HeT DevTools: 提交助手（预填发版 📦）"
+        "title": "%cmd.commitRelease%"
       },
       {
         "command": "het.release",
-        "title": "HeT DevTools: 发布中心"
+        "title": "%cmd.release%"
       },
       {
         "command": "het.preflight",
-        "title": "HeT DevTools: 发布前检查（Preflight）"
+        "title": "%cmd.preflight%"
       },
       {
         "command": "het.benchmark",
-        "title": "HeT DevTools: 上板测试（Benchmark）"
+        "title": "%cmd.benchmark%"
       },
       {
         "command": "het.ci",
-        "title": "HeT DevTools: CI 状态"
+        "title": "%cmd.ci%"
       },
       {
         "command": "het.audit",
-        "title": "HeT DevTools: 生成审计报告"
+        "title": "%cmd.audit%"
       },
       {
         "command": "het.patent",
-        "title": "HeT DevTools: 专利挖掘向导"
+        "title": "%cmd.patent%"
       },
       {
         "command": "het.newProject",
-        "title": "HeT DevTools: 从模板初始化新项目"
+        "title": "%cmd.newProject%"
       },
       {
         "command": "het.templateUpdate",
-        "title": "HeT DevTools: 检查模板更新"
+        "title": "%cmd.templateUpdate%"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "het.assistant",
+        "name": "het",
+        "description": "HeT DevTools intent router: natural language → matching HeT GUI action",
+        "isSticky": true
       }
     ]
   },

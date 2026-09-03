@@ -47,6 +47,12 @@ import { resolveTemplateSource, resolveCloneRef } from './core/templateService';
 import { TEMPLATE_REPO } from './core/templateDefaults';
 import { encodeMarker, parseMarker, parseCommitList, renderSyncPlan, markerPath } from './core/templateSync';
 import { FcppMetadata, FcppProject, ParsedIssue } from './types';
+import { normalizeLocale, t as _tl } from './utils/i18n';
+
+/** Locale-aware label helper (zh/en runtime chrome). */
+function L(key: string, params?: Record<string, string | number>): string {
+  return _tl(normalizeLocale(vscode.env.language), key, params);
+}
 
 let channel: vscode.OutputChannel | undefined;
 let statusItem: vscode.StatusBarItem | undefined;
@@ -85,12 +91,29 @@ async function resolveGithubAuth(): Promise<AuthInfo> {
 
 /** Entry point: wires Phase 1 host features (detection, status bar, build). */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  const startedAt = Date.now();
+
+  // T-5.2: opt-in anonymous local telemetry (default OFF, nothing leaves this machine).
+  const track = (name: string): void => {
+    try {
+      if (vscode.workspace.getConfiguration('het').get<boolean>('telemetry.enabled', false)) {
+        const key = `het.stats.${name}`;
+        void context.workspaceState.update(key, (context.workspaceState.get<number>(key) ?? 0) + 1);
+        void context.workspaceState.update('het.stats.lastActive', Date.now());
+        log(`[telemetry] ${name} (local counter)`);
+      }
+    } catch {
+      /* never breaks activation */
+    }
+  };
+
   channel = vscode.window.createOutputChannel(LOG_CHANNEL_NAME);
   setOutputChannel(channel);
   context.subscriptions.push(channel, buildDiagnostics);
   activationLine = `activated — ${EXTENSION_ID} v${context.extension.packageJSON.version}`;
   log(activationLine);
   contextRef = context;
+  track('activation');
 
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   context.subscriptions.push(statusItem);
@@ -107,10 +130,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.getActivationLine', () => activationLine),
     vscode.commands.registerCommand('het.getCurrentProject', () => currentProject?.metadata?.name ?? null),
     vscode.commands.registerCommand('het.refresh', () => refreshStatus()),
-    vscode.commands.registerCommand('het.build', () => buildProject()),
+    vscode.commands.registerCommand('het.build', () => { track('build'); return buildProject(); }),
     vscode.commands.registerCommand('het.welcome', () => openWelcome(context)),
     vscode.commands.registerCommand('het.dashboard', () => openDashboard(context)),
-    vscode.commands.registerCommand('het.test', () => runTests()),
+    vscode.commands.registerCommand('het.test', () => { track('test'); return runTests(); }),
     vscode.commands.registerCommand('het.showTestResults', () => showStoredTestResults(context)),
     vscode.commands.registerCommand('het.openSettings', () => openSettingsPanel(context)),
     vscode.commands.registerCommand('het.openDeps', () => openDepsPanel(context)),
@@ -118,15 +141,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.newModule', () => openModuleWizard(context)),
     vscode.commands.registerCommand('het.generateTests', () => openTestgenPanel(context)),
     vscode.commands.registerCommand('het.coverage', () => openCoveragePanel(context)),
-    vscode.commands.registerCommand('het.docs', () => openDocsPanel(context)),
-    vscode.commands.registerCommand('het.quality', () => openQualityPanel(context)),
+    vscode.commands.registerCommand('het.docs', () => { track('docs'); return openDocsPanel(context); }),
+    vscode.commands.registerCommand('het.quality', () => { track('quality'); return openQualityPanel(context); }),
     vscode.commands.registerCommand('het.commit', () => openCommitPanel(context)),
     vscode.commands.registerCommand('het.commitRelease', () => openCommitPanel(context, { type: 'chore', emoji: ':package:', subject: 'bump version' })),
     vscode.commands.registerCommand('het.release', () => openReleasePanel(context)),
     vscode.commands.registerCommand('het.preflight', () => openPreflightPanel(context)),
-    vscode.commands.registerCommand('het.benchmark', () => openBenchPanel(context)),
+    vscode.commands.registerCommand('het.benchmark', () => { track('benchmark'); return openBenchPanel(context); }),
     vscode.commands.registerCommand('het.ci', () => openCiPanel(context)),
-    vscode.commands.registerCommand('het.audit', () => runAuditReport()),
+    vscode.commands.registerCommand('het.audit', () => { track('audit'); return runAuditReport(); }),
     vscode.commands.registerCommand('het.patent', () => runPatentWizard()),
     vscode.commands.registerCommand('het.newProject', () => runNewProjectWizard()),
     vscode.commands.registerCommand('het.newProjectDirect', (opts: NewProjectOpts) => newProjectFromTemplate(opts)),
@@ -140,6 +163,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand('het.getLastConanOutput', () => lastConanOutput.slice(-4000)),
   );
+
+  // T-5.3: activation perf note + debounced metadata/conandata file watchers
+  // (only these two files drive project state, per development-plan T-5.3).
+  let refreshTimer: NodeJS.Timeout | undefined;
+  const scheduleRefresh = (): void => {
+    if (refreshTimer) {
+      clearTimeout(refreshTimer);
+    }
+    refreshTimer = setTimeout(() => void refreshStatus(), 500);
+  };
+  const watcher1 = vscode.workspace.createFileSystemWatcher('**/metadata.json');
+  const watcher2 = vscode.workspace.createFileSystemWatcher('**/conandata.yml');
+  watcher1.onDidChange(scheduleRefresh);
+  watcher1.onDidCreate(scheduleRefresh);
+  watcher1.onDidDelete(scheduleRefresh);
+  watcher2.onDidChange(scheduleRefresh);
+  watcher2.onDidCreate(scheduleRefresh);
+  watcher2.onDidDelete(scheduleRefresh);
+  context.subscriptions.push(watcher1, watcher2);
+  log(`[perf] activate ${Date.now() - startedAt}ms`);
 
   // First-run onboarding (never inside the automated extension test host).
   const isTestHost = process.argv.some((a) => a.includes('--extensionTestsPath'));
@@ -2003,15 +2046,15 @@ async function refreshStatus(): Promise<void> {
 
   if (currentProject?.metadata) {
     const m = currentProject.metadata;
-    statusItem.text = `$(package) ${m.name} v${m.version ?? '0.0.0'} ${m.build_type ?? ''}`.replace(/\s+$/, '');
+    statusItem.text = L('status.project', { name: m.name, version: m.version ?? '0.0.0', buildType: m.build_type ?? '' }).replace(/\s+$/, '');
     statusItem.tooltip = `HeT DevTools — ${m.name} @ ${currentProject.root}（level: ${currentProject.level}）\n单击构建`;
     statusItem.command = 'het.build';
     statusItem.show();
     log(`project detected: ${m.name} (level=${currentProject.level}) @ ${currentProject.root}`);
   } else {
     currentProject = undefined;
-    statusItem.text = 'HeT: 无 fcpp 项目';
-    statusItem.tooltip = '当前工作区未检测到 fcpp 项目（需要 metadata.json）';
+    statusItem.text = L('status.noProject');
+    statusItem.tooltip = L('notify.noProject');
     statusItem.command = undefined;
     statusItem.show();
     log('no fcpp project in current workspace');
@@ -2051,7 +2094,7 @@ async function runConanOnce(project: FcppProject): Promise<{ ok: boolean; stdout
 async function buildProject(): Promise<void> {
   const project = currentProject;
   if (!project || !project.metadata) {
-    void vscode.window.showWarningMessage('未检测到 fcpp 项目：请先打开含 metadata.json 的库文件夹。');
+    void vscode.window.showWarningMessage(L('notify.noProject'));
     return;
   }
   buildDiagnostics.clear();
@@ -2085,7 +2128,7 @@ async function buildProject(): Promise<void> {
 async function executeTestRun(): Promise<{ ok: boolean; stdout: string; stderr: string } | undefined> {
   const project = currentProject;
   if (!project || !project.metadata) {
-    void vscode.window.showWarningMessage('未检测到 fcpp 项目：请先打开含 metadata.json 的库文件夹。');
+    void vscode.window.showWarningMessage(L('notify.noProject'));
     return undefined;
   }
 
@@ -2114,7 +2157,7 @@ async function executeTestRun(): Promise<{ ok: boolean; stdout: string; stderr: 
 async function runTests(): Promise<void> {
   const project = currentProject;
   if (!project || !project.metadata) {
-    void vscode.window.showWarningMessage('未检测到 fcpp 项目：请先打开含 metadata.json 的库文件夹。');
+    void vscode.window.showWarningMessage(L('notify.noProject'));
     return;
   }
 
@@ -2134,7 +2177,7 @@ async function runTests(): Promise<void> {
     return;
   }
   void vscode.window.showInformationMessage(
-    `测试完成：通过 ${lastTestSummary?.passed ?? 0} · 失败 ${lastTestSummary?.failed ?? 0} · 跳过 ${lastTestSummary?.skipped ?? 0}`,
+    L('test.done', { passed: lastTestSummary?.passed ?? 0, failed: lastTestSummary?.failed ?? 0, skipped: lastTestSummary?.skipped ?? 0 }),
   );
   if (lastTestSummary) {
     showTestResults(contextRef, lastTestSummary);

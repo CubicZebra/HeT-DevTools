@@ -6,16 +6,21 @@ name: CI (lint / test / package)
   pull_request:
 
 jobs:
-  ci:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  verify:
+    name: verify (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
           cache: npm
 
       - name: Install dependencies
@@ -30,12 +35,33 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      - name: Package .vsix
+      - name: Package .vsix (dry-run artifact)
         run: npm run package
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: het-devtools-vsix
+          name: het-devtools-vsix-${{ matrix.os }}
           path: "*.vsix"
           if-no-files-found: error
+
+  # Extension-host smoke against VS Code 1.95 (browser-less, headless download).
+  integration:
+    name: extension-host smoke (VS Code 1.95)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Extension host smoke (activation + cockpit)
+        run: npm run test:integration
+        env:
+          VSCODE_VERSION: "1.95.0"
+

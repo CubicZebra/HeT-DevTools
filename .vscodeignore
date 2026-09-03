@@ -2,8 +2,11 @@
 .vscode/**
 .vscode-test/**
 src/**
-out/test/**
+scripts/**
+out/**
+!out/extension.js
 **/*.map
+**/*.ts
 tsconfig.json
 eslint.config.mjs
 esbuild.mjs
@@ -11,6 +14,5 @@ esbuild.mjs
 .git/**
 workspace/**
 **/tsconfig*.json
-**/*.ts
 **/node_modules/**
 *.vsix

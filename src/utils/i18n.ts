@@ -30,6 +30,14 @@ const CATALOG: Record<string, Entry> = {
   // --- build (placeholder wording, wired in Phase 1) ---
   'build.success': { zh: '构建成功', en: 'Build succeeded' },
   'build.failed': { zh: '构建失败', en: 'Build failed' },
+  // --- status bar / shared notices (wired for runtime locale) ---
+  'status.noProject': { zh: 'HeT: 无 fcpp 项目', en: 'HeT: no fcpp project' },
+  'status.project': { zh: '{name} v{version} {buildType}', en: '{name} v{version} {buildType}' },
+  'notify.noProject': {
+    zh: '未检测到 fcpp 项目：请先打开含 metadata.json 的库文件夹。',
+    en: 'No fcpp project detected: open a folder with metadata.json first.',
+  },
+  'test.done': { zh: '测试完成：通过 {passed} · 失败 {failed} · 跳过 {skipped}', en: 'Tests done: {passed} passed · {failed} failed · {skipped} skipped' },
 };
 
 /** Translate a key for a locale; unknown keys fall back to the key itself. */
