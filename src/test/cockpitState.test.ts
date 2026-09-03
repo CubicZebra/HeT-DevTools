@@ -101,17 +101,25 @@ describe('cockpit.render', () => {
     page: 'deps',
     top: { ...s0.top, projectName: 'mylib', health: 90, templateBehind: 1 },
   };
-  it('renders rail with codicon icons and active page', () => {
+  it('renders the toc chips with codicon icons and the active chip', () => {
     const html = buildCockpitHtml(state, { codiconCss: 'vscode://x/codicon.css' });
     assert.ok(html.includes('codicon-package'));
     assert.ok(html.includes('data-page="deps"'));
     assert.ok(html.includes('rail-item active'));
     assert.ok(html.includes('codicon-home'));
   });
-  it('renders primary action buttons only on overview', () => {
-    assert.ok(buildCockpitHtml(s0, { codiconCss: '' }).includes('data-cmd="het.build"'));
+  it('renders the single-column document with a section per page', () => {
+    const html = buildCockpitHtml(state, { codiconCss: '' });
+    assert.ok(html.includes('class="dsec"'));
+    assert.ok(html.includes('id="sec-deps"'));
+    assert.ok(html.includes('data-sec="overview"'));
     const deps = buildCockpitHtml({ ...s0, page: 'deps' }, { codiconCss: '' });
-    assert.ok(!deps.includes('data-cmd="het.build"'));
+    assert.ok(deps.includes('data-sec="deps"'));
+    // provided section bodies are embedded into the document
+    const regions = renderCockpitRegions(s0, 'zh', { overview: '<b>OV</b>', deps: '<b>DEPS</b>' });
+    assert.ok(regions.main.includes('<b>OV</b>'));
+    assert.ok(regions.main.includes('<b>DEPS</b>'));
+    assert.ok(!regions.main.includes('「概览」分区暂未就绪'));
   });
   it('renders expanded log drawer with escaped lines', () => {
     const s = reduceCockpit(reduceCockpit(s0, { type: 'log:start', title: 'build' }), { type: 'log:append', line: '<script>alert(1)</script>' });
@@ -150,9 +158,9 @@ describe('cockpit.render', () => {
     assert.ok(html.includes('codicon-beaker'));
   });
 
-  it('renders placeholder for pages without adapters yet', () => {
+  it('renders placeholder for sections whose payload is missing', () => {
     const html = buildPageContentHtml('commit', undefined);
-    assert.ok(html.includes('P-G2 将在此接入「提交」'));
+    assert.ok(html.includes('「提交」分区暂未就绪'));
   });
 
   it('renders summary pages: text rows without icons, primary buttons with icons', () => {

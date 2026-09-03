@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { initialCockpitState, reduceCockpit, CockpitEvent, CockpitState } from './state';
 import { isCockpitPage, CockpitPage } from './layout';
-import { buildCockpitHtml, buildPageContentHtml, renderCockpitRegions, renderWizardRegion, CockpitWizardInfo, PagePayload, CockpitLang } from './webview/render';
+import { buildCockpitHtml, renderCockpitRegions, renderWizardRegion, buildSectionBodyHtml, CockpitWizardInfo, PagePayload, CockpitLang } from './webview/render';
 import { normalizeLocale } from '../../utils/i18n';
 
 /**
@@ -18,7 +18,7 @@ let cockpitState: CockpitState = initialCockpitState();
 const pageProviders = new Map<CockpitPage, () => Promise<PagePayload>>();
 /** Page → interactive action handler (P-G2 deep forms; page:action messages). */
 const pageHandlers = new Map<CockpitPage, (action: string, data: Record<string, string>) => Promise<void>>();
-/** Cached rendered main-region HTML per page. */
+/** Section body cache (V2-2): each body is the payload rendered without a wrapper. */
 const pageHtmlCache = new Map<CockpitPage, string>();
 /** Sequence guard for the post-run auto-collapse timer. */
 let logDoneSeq = 0;
@@ -74,35 +74,57 @@ export function setCockpitPageHandler(
   pageHandlers.set(page, handler);
 }
 
-function postState(): void {
+function bodyMap(): Partial<Record<CockpitPage, string>> {
+  const m: Partial<Record<CockpitPage, string>> = {};
+  for (const [p, html] of pageHtmlCache) {
+    m[p] = html;
+  }
+  return m;
+}
+
+function postState(focusSection?: string): void {
   if (!cockpitPanel) {
     return;
   }
-  const regions = renderCockpitRegions(cockpitState, cockpitLang);
-  const cachedMain = pageHtmlCache.get(cockpitState.page);
+  const regions = renderCockpitRegions(cockpitState, cockpitLang, bodyMap());
   void cockpitPanel.webview.postMessage({
     type: 'cockpit:state',
     regions: {
       top: regions.top,
       rail: regions.rail,
       drawer: regions.drawer,
-      main: cachedMain ?? regions.main,
+      main: regions.main,
       wizard: renderWizardRegion(cockpitState.wizard, wizardInfo, wizardDraft, cockpitLang),
     },
+    focusSection,
   });
 }
 
-async function loadPage(page: CockpitPage): Promise<void> {
+async function loadPage(page: CockpitPage, silent = false): Promise<void> {
   const provider = pageProviders.get(page);
   if (!provider) {
     return;
   }
   try {
     const payload = await provider();
-    pageHtmlCache.set(page, buildPageContentHtml(page, payload));
+    pageHtmlCache.set(page, buildSectionBodyHtml(page, payload));
   } catch {
     pageHtmlCache.delete(page);
   }
+  if (!silent) {
+    postState();
+  }
+}
+
+/** Load every registered section body (V2-2: the whole dashboard is one doc). */
+async function loadAllSections(): Promise<void> {
+  await Promise.all(Array.from(pageProviders.keys()).map((p) => loadPage(p, true)));
+  postState();
+}
+
+/** Refresh a few live sections after relevant events, then repaint once. */
+async function refreshSections(pages: CockpitPage[]): Promise<void> {
+  await Promise.all(pages.map((p) => loadPage(p, true)));
   postState();
 }
 
@@ -152,6 +174,12 @@ function handleWizardMessage(msg: { action: string; data?: Record<string, string
 /** Feed a host-side event into the cockpit (no-op when the cockpit is closed). */
 export function emitCockpitEvent(event: CockpitEvent): void {
   cockpitState = reduceCockpit(cockpitState, event);
+  const refresh: CockpitPage[] = [];
+  if (event.type === 'log:done' || event.type === 'issue:summary') {
+    refresh.push('overview', 'buildTest');
+  } else if (event.type === 'project' || event.type === 'health' || event.type === 'template:update') {
+    refresh.push('overview');
+  }
   if (event.type === 'log:done') {
     const seq = ++logDoneSeq;
     setTimeout(() => {
@@ -168,11 +196,19 @@ export function emitCockpitEvent(event: CockpitEvent): void {
     }, 3000);
   }
   postState();
+  if (refresh.length > 0) {
+    void refreshSections(refresh);
+  }
 }
 
-export function openCockpitPanel(context: vscode.ExtensionContext): vscode.WebviewPanel {
+export function openCockpitPanel(context: vscode.ExtensionContext, focus?: CockpitPage): vscode.WebviewPanel {
   if (cockpitPanel) {
     cockpitPanel.reveal(vscode.ViewColumn.One);
+    if (focus && isCockpitPage(focus)) {
+      cockpitState = reduceCockpit(cockpitState, { type: 'navigate', page: focus });
+      void cockpitContext?.workspaceState.update(persistKey('lastPage'), focus);
+      postState(focus);
+    }
     return cockpitPanel;
   }
   cockpitContext = context;
@@ -180,7 +216,7 @@ export function openCockpitPanel(context: vscode.ExtensionContext): vscode.Webvi
   restorePersisted();
   cockpitPanel = vscode.window.createWebviewPanel(
     'het.cockpit',
-    'HeT DevTools 驾驶舱',
+    'HeT DevTools 仪表盘',
     vscode.ViewColumn.One,
     { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [context.extensionUri] },
   );
@@ -192,20 +228,19 @@ export function openCockpitPanel(context: vscode.ExtensionContext): vscode.Webvi
   };
   cockpitPanel.webview.html = buildCockpitHtml(cockpitState, assets, wizardInfo, wizardDraft);
 
-  cockpitPanel.webview.onDidReceiveMessage((message: { type: string; page?: string; expand?: boolean; command?: string; action?: string; data?: Record<string, string> }) => {
+  cockpitPanel.webview.onDidReceiveMessage((message: { type: string; page?: string; section?: string; expand?: boolean; command?: string; action?: string; data?: Record<string, string> }) => {
     if (message.type === 'cockpit:navigate' && message.page && isCockpitPage(message.page)) {
       cockpitState = reduceCockpit(cockpitState, { type: 'navigate', page: message.page });
       void cockpitContext?.workspaceState.update(persistKey('lastPage'), message.page);
       postState();
-      void loadPage(message.page);
     } else if (message.type === 'drawer:toggle') {
       cockpitState = reduceCockpit(cockpitState, { type: 'drawer:toggle', expand: message.expand === true });
       postState();
     } else if (message.type === 'page:action' && message.command) {
       void vscode.commands.executeCommand(message.command);
     } else if (message.type === 'cockpit:page:action' && message.action) {
-      const handler = pageHandlers.get(cockpitState.page);
-      const page = cockpitState.page;
+      const page = (message.section && isCockpitPage(message.section) ? message.section : cockpitState.page) as CockpitPage;
+      const handler = pageHandlers.get(page);
       void (async () => {
         if (handler) {
           try {
@@ -225,6 +260,14 @@ export function openCockpitPanel(context: vscode.ExtensionContext): vscode.Webvi
     cockpitPanel = undefined;
   });
 
-  void loadPage(cockpitState.page);
+  const target = cockpitState.page;
+  void (async () => {
+    await loadAllSections();
+    if (focus && isCockpitPage(focus) && focus !== target) {
+      cockpitState = reduceCockpit(cockpitState, { type: 'navigate', page: focus });
+      void cockpitContext?.workspaceState.update(persistKey('lastPage'), focus);
+      postState(focus);
+    }
+  })();
   return cockpitPanel;
 }

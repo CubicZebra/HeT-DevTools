@@ -7,7 +7,7 @@ import { runHealthCheck } from './core/healthCheck';
 import { parseCompilerOutput } from './core/outputParser';
 import { detectProjectsIn } from './core/projectDetector';
 import { detectToolchain } from './core/toolchainDetector';
-import { showDashboardPanel } from './features/dashboard/panel';
+import { CockpitPage, isCockpitPage } from './features/cockpit/layout';
 import { showDepsPanel, DepAddInput } from './features/deps/panel';
 import { ModulePanelInput, showModuleWizardPanel } from './features/moduleWizard/panel';
 import { DiscoveredModule, ModeBInput, ModeBPreview, showTestgenPanel } from './features/testgen/panel';
@@ -423,7 +423,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.getCockpitState', () => getCockpitState()),
     vscode.commands.registerCommand('het.refresh', () => refreshStatus()),
     vscode.commands.registerCommand('het.build', () => { track('build'); return buildProject(); }),
-    vscode.commands.registerCommand('het.dashboard', () => openDashboard(context)),
+    vscode.commands.registerCommand('het.dashboard', (section?: string) => openDashboard(context, section)),
     vscode.commands.registerCommand('het.test', () => { track('test'); return runTests(); }),
     vscode.commands.registerCommand('het.showTestResults', () => showStoredTestResults(context)),
     vscode.commands.registerCommand('het.openSettings', () => openSettingsPanel(context)),
@@ -448,7 +448,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await runTemplateUpdateCheck();
       void emitTemplateBehind();
     }),
-    vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
+    vscode.commands.registerCommand('het.healthCheck', () => {
+      void ensureHealthCached(true);
+      openDashboard(context);
+    }),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
       lastTestSummary
@@ -518,12 +521,9 @@ async function buildSnapshot(): Promise<DashboardSnapshot> {
   return { project: currentProject, tools, health };
 }
 
-function runHostCommand(command: string): void {
-  void vscode.commands.executeCommand(command);
-}
-
-function openDashboard(context: vscode.ExtensionContext): void {
-  showDashboardPanel(context, { getSnapshot: buildSnapshot, runCommand: runHostCommand });
+function openDashboard(context: vscode.ExtensionContext, section?: string): void {
+  const target = section && isCockpitPage(section) ? (section as CockpitPage) : undefined;
+  openCockpitPanel(context, target);
 }
 
 /** Dependency manager (G-07): list + add/remove with preview & dual-file write.

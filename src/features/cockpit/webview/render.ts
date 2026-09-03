@@ -190,26 +190,32 @@ function benchContent(p: BenchPayload): string {
     ${p.note ? `<div class="status">${esc(p.note)}</div>` : ''}`;
 }
 
-/** Render the full main-region HTML for a page with its payload (P-G2). */
+/** Render the full main-region HTML for a page with its payload (P-G2; used by tests). */
 export function buildPageContentHtml(page: CockpitPage, payload: PagePayload): string {
   const def = PAGES.find((p) => p.id === page) ?? PAGES[0];
   const head = `<h1>${esc(def.label)}</h1><div class="sub">${esc(def.hint)}</div>`;
+  return `<section class="page">${head}${buildSectionBodyHtml(page, payload)}</section>`;
+}
+
+/** Body-only HTML of a section payload (V2-2: embedded in the single-column doc). */
+export function buildSectionBodyHtml(page: CockpitPage, payload: PagePayload): string {
   if (page === 'overview') {
-    return `<section class="page">${head}${overviewContent(payload as OverviewPayload)}</section>`;
+    return overviewContent((payload ?? { tools: [], lastBuildOk: null, lastTest: null }) as OverviewPayload);
   }
   if (page === 'buildTest') {
-    return `<section class="page">${head}${buildTestContent(payload as BuildTestPayload)}</section>`;
+    return buildTestContent((payload ?? { lastBuildOk: null, lastTest: null }) as BuildTestPayload);
   }
   if (page === 'deps') {
-    return `<section class="page">${head}${depsContent((payload as DepsPayload) ?? { items: [], issues: [] })}</section>`;
+    return depsContent((payload as DepsPayload) ?? { items: [], issues: [] });
   }
   if (page === 'bench') {
-    return `<section class="page">${head}${benchContent((payload as BenchPayload) ?? { platform: '未检测', parsed: null })}</section>`;
+    return benchContent((payload as BenchPayload) ?? { platform: '未检测', parsed: null });
   }
+  const def = PAGES.find((p) => p.id === page) ?? PAGES[0];
   if (payload && typeof payload === 'object' && 'rows' in payload && 'actions' in payload) {
-    return `<section class="page">${head}${summaryContent(payload as SummaryPayload)}</section>`;
+    return summaryContent(payload as SummaryPayload);
   }
-  return `<section class="page">${head}<div class="placeholder">（P-G2 将在此接入「${esc(def.label)}」页面内容；本页为驾驶舱骨架占位）</div></section>`;
+  return `<div class="placeholder">（「${esc(def.label)}」分区暂未就绪）</div>`;
 }
 
 /** P-G4 host-supplied wizard facts (template source, destination parent). */
@@ -322,13 +328,41 @@ function joinWeb(name: string, parent: string): string {
   return `${parent.replace(/[\\]+$/u, '')}/${n}`;
 }
 
+/** In-page table of contents: horizontal chips that anchor to each section. */
 function railHtml(active: CockpitPage): string {
-  return PAGES.map(
+  return `<div class="toc-inner">${PAGES.map(
     (p) =>
-      `<button class="rail-item ${p.id === active ? 'active' : ''}" data-page="${p.id}" title="${esc(p.hint)}">
+      `<a class="rail-item ${p.id === active ? 'active' : ''}" href="#sec-${p.id}" data-page="${p.id}" title="${esc(p.hint)}">
         <i class="codicon codicon-${p.icon}"></i><span>${esc(p.label)}</span>
-      </button>`,
-  ).join('');
+      </a>`,
+  ).join('')}</div>`;
+}
+
+function placeholderBody(def: { label: string }): string {
+  return `<div class="placeholder">（「${esc(def.label)}」分区暂未就绪）</div>`;
+}
+
+/** One collapsible dashboard section: <details> gives free open/close (V2-2). */
+function sectionHtml(def: { id: CockpitPage; icon: string; label: string; hint: string }, body: string): string {
+  return `<details class="dsec" open data-sec="${def.id}">
+    <summary class="dsec-head" id="sec-${def.id}"><i class="codicon codicon-${def.icon}"></i><span class="sl">${esc(def.label)}</span><span class="hint">${esc(def.hint)}</span></summary>
+    <div class="dsec-body">${body}</div>
+  </details>`;
+}
+
+/**
+ * Single-column, markdown-like document of every dashboard section (V2-2).
+ * The page field keeps the active TOC highlight; all bodies render stacked so
+ * the panel never needs a left rail and never breaks at narrow widths.
+ */
+export function dashboardMainHtml(
+  s: CockpitState,
+  bodies: Partial<Record<CockpitPage, string>> = {},
+  lang: CockpitLang = 'zh',
+): string {
+  void s;
+  void lang;
+  return `<div class="doc">${PAGES.map((p) => sectionHtml(p, bodies[p.id] ?? placeholderBody(p))).join('')}</div>`;
 }
 
 function topHtml(s: CockpitState, lang: CockpitLang = 'zh'): string {
@@ -338,30 +372,6 @@ function topHtml(s: CockpitState, lang: CockpitLang = 'zh'): string {
   const name = s.top.projectName ? `<span class="proj"><i class="codicon codicon-package"></i>${esc(s.top.projectName)}</span>` : '<span class="proj dim">HeT DevTools</span>';
   const np = `<button class="chip action" data-wizard="open">${t(lang, '＋ 新项目', '+ New project')}</button>`;
   return `${name}${health}${tpl}${run}<span class="flex"></span>${np}`;
-}
-
-function mainHtml(s: CockpitState): string {
-  const def = PAGES.find((p) => p.id === s.page) ?? PAGES[0];
-  const primaryActions =
-    s.page === 'overview'
-      ? `<div class="actions">
-          <button class="primary" data-cmd="het.build"><i class="codicon codicon-play"></i>构建并测试</button>
-          <button class="primary" data-cmd="het.docs"><i class="codicon codicon-book"></i>文档</button>
-          <button class="primary" data-cmd="het.quality"><i class="codicon codicon-shield"></i>质量</button>
-          <button class="primary" data-cmd="het.release"><i class="codicon codicon-rocket"></i>发布</button>
-        </div>`
-      : '';
-  const buildState =
-    s.page === 'buildTest' && s.lastBuildOk !== null
-      ? `<div class="row"><span class="status">${s.lastBuildOk ? '✓ 最近构建成功' : '✗ 最近构建失败'}</span></div>`
-      : '';
-  return `<section class="page">
-    <h1>${esc(def.label)}</h1>
-    <div class="sub">${esc(def.hint)}</div>
-    ${primaryActions}
-    ${buildState}
-    <div class="placeholder">（P-G2 将在此接入「${esc(def.label)}」页面内容；本页为驾驶舱骨架占位）</div>
-  </section>`;
 }
 
 function drawerHtml(s: CockpitState, lang: CockpitLang = 'zh'): string {
@@ -387,6 +397,7 @@ export function buildCockpitHtml(
   assets: CockpitAssets,
   wizardInfo?: CockpitWizardInfo,
   wizardDraft?: Record<string, string>,
+  sectionBodies?: Partial<Record<CockpitPage, string>>,
 ): string {
   const lang: CockpitLang = assets.lang ?? 'zh';
   return `<!DOCTYPE html>
@@ -411,16 +422,26 @@ export function buildCockpitHtml(
   .chip.fail { background: #a1260d; color: #fff; }
   .spin { display: inline-block; animation: het-spin 1s linear infinite; }
   @keyframes het-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-  .body { display: flex; flex: 1; overflow: hidden; }
-  .rail { width: 172px; min-width: 172px; overflow-y: auto; padding: 6px;
-    border-right: 1px solid var(--vscode-widget-border,#333); background: var(--vscode-sideBar-background); }
-  .rail-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-    background: none; border: none; color: var(--vscode-foreground); padding: 6px 10px; margin: 1px 0;
-    border-radius: 5px; cursor: pointer; font-size: 13px; }
-  .rail-item i { width: 16px; }
-  .rail-item:hover { background: var(--vscode-list-hoverBackground); }
-  .rail-item.active { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
-  .main { flex: 1; overflow-y: auto; padding: 14px 18px; }
+  .main { flex: 1; overflow-y: auto; padding: 12px 16px 24px; }
+  .rail { position: sticky; top: 0; z-index: 6; display: flex; overflow-x: auto; gap: 2px;
+    padding: 4px 12px; border-bottom: 1px solid var(--vscode-widget-border,#333);
+    background: var(--vscode-editorWidget-background); }
+  .rail-item { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; text-decoration: none;
+    color: var(--vscode-foreground); padding: 3px 10px; border-radius: 12px; font-size: 12px; cursor: pointer; opacity: .75; }
+  .rail-item i { width: 14px; }
+  .rail-item:hover { background: var(--vscode-list-hoverBackground); opacity: 1; }
+  .rail-item.active { background: var(--vscode-list-activeSelectionBackground);
+    color: var(--vscode-list-activeSelectionForeground); opacity: 1; }
+  .doc { max-width: 900px; margin: 0 auto; }
+  .dsec { margin: 8px 0; border: 1px solid var(--vscode-widget-border,#2b2b2b); border-radius: 8px; }
+  .dsec-head { display: flex; align-items: center; gap: 7px; padding: 7px 12px; cursor: pointer;
+    user-select: none; font-size: 13px; font-weight: 600; background: var(--vscode-editorWidget-background);
+    list-style: none; scroll-margin-top: 44px; border-radius: 8px; }
+  .dsec-head::-webkit-details-marker, .dsec-head::marker { display: none; content: ''; }
+  .dsec-head i { width: 16px; }
+  .dsec-head .hint { font-weight: 400; opacity: .55; font-size: 11px; margin-left: 4px; }
+  .dsec-body { padding: 4px 14px 12px; }
+  .grid { display: flex; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
   .page h1 { font-size: 17px; margin: 0 0 2px; }
   .page .sub { opacity: .7; font-size: 12px; margin-bottom: 10px; }
   .placeholder { margin-top: 14px; padding: 22px; text-align: center; opacity: .55; font-size: 12px;
@@ -486,10 +507,8 @@ export function buildCockpitHtml(
 </head>
 <body>
   <div class="top" id="top">${topHtml(s, lang)}</div>
-  <div class="body">
-    <nav class="rail" id="rail">${railHtml(s.page)}</nav>
-    <main class="main" id="main">${mainHtml(s)}</main>
-  </div>
+  <nav class="rail" id="rail">${railHtml(s.page)}</nav>
+  <main class="main" id="main">${dashboardMainHtml(s, sectionBodies, lang)}</main>
   <div id="drawer">${drawerHtml(s, lang)}</div>
   <div id="wizard">${renderWizardRegion(s.wizard, wizardInfo ?? { templateRepo: '', templateRef: '', modeLabel: '', parentDir: '' }, wizardDraft ?? {}, lang)}</div>
   <script>
@@ -511,7 +530,8 @@ export function buildCockpitHtml(
           for (const a of pa.attributes) {
             if (a.name.indexOf('data-arg-') === 0) { data[a.name.slice('data-arg-'.length)] = a.value; }
           }
-          vscode.postMessage({ type: 'cockpit:page:action', action: pa.getAttribute('data-page-action'), data });
+          const sec = e.target.closest('[data-sec]') ? e.target.closest('[data-sec]').getAttribute('data-sec') : undefined;
+          vscode.postMessage({ type: 'cockpit:page:action', action: pa.getAttribute('data-page-action'), data, section: sec });
         }
       });
       document.getElementById('main').addEventListener('submit', (e) => {
@@ -520,7 +540,8 @@ export function buildCockpitHtml(
         e.preventDefault();
         const data = {};
         new FormData(form).forEach((v, k) => { data[k] = String(v); });
-        vscode.postMessage({ type: 'cockpit:page:action', action: form.getAttribute('data-action'), data });
+        const sec = form.closest('[data-sec]') ? form.closest('[data-sec]').getAttribute('data-sec') : undefined;
+        vscode.postMessage({ type: 'cockpit:page:action', action: form.getAttribute('data-action'), data, section: sec });
       });
       document.getElementById('drawer').addEventListener('click', (e) => {
         if (e.target.closest('[data-toggle="drawer"]')) { vscode.postMessage({ type: 'drawer:toggle', expand: !document.getElementById('drawer').firstElementChild.classList.contains('expanded') }); }
@@ -560,9 +581,15 @@ export function buildCockpitHtml(
         if (m && m.type === 'cockpit:state' && m.regions) {
           document.getElementById('top').innerHTML = m.regions.top;
           document.getElementById('rail').innerHTML = m.regions.rail;
-          document.getElementById('main').innerHTML = m.regions.main;
+          const mainEl = document.getElementById('main');
+          // Skip no-op doc writes so a TOC jump never resets the scroll.
+          if (mainEl.innerHTML !== m.regions.main) { mainEl.innerHTML = m.regions.main; }
           document.getElementById('drawer').innerHTML = m.regions.drawer;
           document.getElementById('wizard').innerHTML = m.regions.wizard;
+          if (m.focusSection) {
+            const el = document.getElementById('sec-' + m.focusSection);
+            if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+          }
         }
       });
     })();
@@ -571,10 +598,16 @@ export function buildCockpitHtml(
 </html>`;
 }
 
-/** Render just the mutable regions (top/rail/main/drawer) from a state. */
+/** Render just the mutable regions (top/toc/main/drawer) from a state. */
 export function renderCockpitRegions(
   s: CockpitState,
   lang: CockpitLang = 'zh',
+  bodies?: Partial<Record<CockpitPage, string>>,
 ): { top: string; rail: string; main: string; drawer: string } {
-  return { top: topHtml(s, lang), rail: railHtml(s.page), main: mainHtml(s), drawer: drawerHtml(s, lang) };
+  return {
+    top: topHtml(s, lang),
+    rail: railHtml(s.page),
+    main: dashboardMainHtml(s, bodies, lang),
+    drawer: drawerHtml(s, lang),
+  };
 }
