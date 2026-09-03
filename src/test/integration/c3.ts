@@ -61,15 +61,24 @@ export async function run(): Promise<void> {
   // ---- 2. quality gate: red → fix → green (same code path as G-11) ----
   const fmt = await which('clang-format');
   assert.ok(fmt, 'clang-format must be on PATH');
+  console.log('[c3] clang-format = ' + fmt);
   const probe = join(root, 'include', 'zz_fmtprobe.h');
   writeFileSync(probe, '#pragma once\nvoid zz_fmtprobe_init(void){int x=0;(void)x;}\n', 'utf8');
   try {
-    const dry = await execRun(fmt, [...clangFormatCheckArgs('', 'c'), probe], { cwd: root });
+    const dry = await execRun(fmt, clangFormatCheckArgs(probe, 'c'), { cwd: root });
     const red = parseClangFormatOutput(`${dry.stdout}\n${dry.stderr}`);
+    console.log(`[c3] dry code=${dry.code} violations=${red.length}`);
     assert.ok(dry.code !== 0 || red.length > 0, 'misformatted file must fail the dry-run');
-    const fix = await execRun(fmt, [...clangFormatFixArgs('', 'c'), probe], { cwd: root });
-    assert.strictEqual(fix.code, 0, 'clang-format -i must succeed');
-    const re = await execRun(fmt, [...clangFormatCheckArgs('', 'c'), probe], { cwd: root });
+    let fix = await execRun(fmt, clangFormatFixArgs(probe, 'c'), { cwd: root });
+    if (fix.code !== 0) {
+      // transient retry (e.g. file watcher/AV contention in the host window)
+      console.log(`[c3] fix attempt1 code=${fix.code} raw=${JSON.stringify((fix.stdout + fix.stderr).slice(0, 300))}`);
+      await new Promise((r) => setTimeout(r, 600));
+      fix = await execRun(fmt, clangFormatFixArgs(probe, 'c'), { cwd: root });
+    }
+    console.log(`[c3] fix code=${fix.code} raw=${JSON.stringify((fix.stdout + fix.stderr).slice(0, 300))}`);
+    assert.strictEqual(fix.code, 0, `clang-format -i must succeed: ${fix.stdout}${fix.stderr}`);
+    const re = await execRun(fmt, clangFormatCheckArgs(probe, 'c'), { cwd: root });
     const recheck = parseClangFormatOutput(`${re.stdout}\n${re.stderr}`);
     assert.strictEqual(re.code, 0, 'fixed file must pass the dry-run');
     assert.strictEqual(recheck.length, 0, 'no violations after fix');
