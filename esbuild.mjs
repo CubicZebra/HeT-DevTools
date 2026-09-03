@@ -15,6 +15,7 @@ const args = process.argv.slice(2);
 const watch = args.includes('--watch');
 const tests = args.includes('--tests');
 const integration = args.includes('--integration');
+const c1 = args.includes('--c1');
 
 /** @type {import('esbuild').BuildOptions} */
 const common = {
@@ -75,6 +76,15 @@ function buildOptions() {
       ...common,
       entryPoints: [join(srcDir, 'test', 'integration', 'index.ts')],
       outfile: join(outDir, 'test-integration', 'index.js'),
+    });
+  }
+
+  // 4) C1 end-to-end check (real fcpp build through the host)
+  if (c1) {
+    options.push({
+      ...common,
+      entryPoints: [join(srcDir, 'test', 'integration', 'c1.ts')],
+      outfile: join(outDir, 'test-integration', 'c1.js'),
     });
   }
   return options;

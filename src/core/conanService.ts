@@ -24,6 +24,8 @@ export interface ConanRunOptions {
   buildMissing?: boolean;
   /** Conan --test-folder override; '' disables the test package step. */
   testFolder?: string | null;
+  /** Extra -pr profile files appended (dev machine adaptations). */
+  profiles?: string[];
   /** Additional raw args appended verbatim. */
   extraArgs?: string[];
 }
@@ -89,7 +91,13 @@ export function conanCreateArgs(options: ConanRunOptions = {}): string[] {
     args.push('-pr:b=default', `-pr:h=${options.profileHost}`);
   }
   const buildType = options.buildType ?? 'Debug';
-  args.push(`-s build_type=${buildType}`);
+  // Separate `-s` from its value: Conan 2 rejects a single combined token.
+  args.push('-s', `build_type=${buildType}`);
+  if (options.profiles) {
+    for (const profile of options.profiles) {
+      args.push('-pr', profile);
+    }
+  }
   if (options.buildMissing !== false) {
     args.push('--build=missing');
   }

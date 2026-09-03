@@ -39,6 +39,17 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "HeT DevTools",
+      "properties": {
+        "het.conan.profiles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra Conan -pr profile files appended to every build (maintainer/dev-machine adaptations; not shipped defaults)."
+        }
+      }
+    },
     "commands": [
       {
         "command": "het.hello",
@@ -63,6 +74,14 @@
       {
         "command": "het.healthCheck",
         "title": "HeT DevTools: 项目体检（驾驶舱）"
+      },
+      {
+        "command": "het.test",
+        "title": "HeT DevTools: 构建并测试"
+      },
+      {
+        "command": "het.showTestResults",
+        "title": "HeT DevTools: 查看测试结果"
       }
     ]
   },
@@ -76,6 +95,7 @@
     "lint": "eslint .",
     "test": "npm run compile && npm run compile:tests && mocha \"out/test/**/*.test.js\"",
     "test:integration": "npm run compile && npm run compile:integration && node scripts/run-integration.mjs",
+    "test:c1": "npm run compile && node esbuild.mjs --c1 && node scripts/run-c1.mjs",
     "package": "vsce package --no-dependencies"
   },
   "devDependencies": {

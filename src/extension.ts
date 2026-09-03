@@ -2,11 +2,13 @@ import { isAbsolute, join } from 'node:path';
 import * as vscode from 'vscode';
 import { EXTENSION_ID, LOG_CHANNEL_NAME, log, setOutputChannel } from './constants';
 import { locateConan, runConanCreate } from './core/conanService';
+import { parseGTestOutput, GTestRunSummary } from './core/gtestRunner';
 import { runHealthCheck } from './core/healthCheck';
 import { parseCompilerOutput } from './core/outputParser';
 import { detectProjectsIn } from './core/projectDetector';
 import { detectToolchain } from './core/toolchainDetector';
 import { showDashboardPanel } from './features/dashboard/panel';
+import { showTestResultsPanel } from './features/testResults/panel';
 import { DashboardSnapshot } from './features/ui';
 import { showWelcomePanel } from './features/welcome/panel';
 import { FcppProject, ParsedIssue } from './types';
@@ -15,6 +17,9 @@ let channel: vscode.OutputChannel | undefined;
 let statusItem: vscode.StatusBarItem | undefined;
 let currentProject: FcppProject | undefined;
 let activationLine = '';
+let lastTestSummary: GTestRunSummary | undefined;
+let lastBuildOk: boolean | undefined;
+let lastConanOutput = '';
 const buildDiagnostics = vscode.languages.createDiagnosticCollection('het-build');
 
 /**
@@ -33,6 +38,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(channel, buildDiagnostics);
   activationLine = `activated — ${EXTENSION_ID} v${context.extension.packageJSON.version}`;
   log(activationLine);
+  contextRef = context;
 
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   context.subscriptions.push(statusItem);
@@ -49,7 +55,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.build', () => buildProject()),
     vscode.commands.registerCommand('het.welcome', () => openWelcome(context)),
     vscode.commands.registerCommand('het.dashboard', () => openDashboard(context)),
+    vscode.commands.registerCommand('het.test', () => runTests()),
+    vscode.commands.registerCommand('het.showTestResults', () => showStoredTestResults(context)),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
+    vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
+    vscode.commands.registerCommand('het.getTestSummary', () =>
+      lastTestSummary
+        ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped }
+        : null,
+    ),
+    vscode.commands.registerCommand('het.getLastConanOutput', () => lastConanOutput.slice(-4000)),
   );
 
   // First-run onboarding (never inside the automated extension test host).
@@ -108,6 +123,35 @@ async function refreshStatus(): Promise<void> {
   }
 }
 
+/** Run `conan create` in the project and stream everything to the output channel. */
+async function executeConan(project: FcppProject): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  const conanExe = await locateConan();
+  if (!conanExe) {
+    throw new Error('找不到 conan。请先安装 Python + Conan（pip install conan; conan profile detect --force）。');
+  }
+
+  // Dev-machine adaptations (NOT shipped defaults): extra -pr profiles may be
+  // needed to override e.g. the CMake version for newer VS generators.
+  const configured = vscode.workspace.getConfiguration('het').get<string[]>('conan.profiles', []);
+  const envProfiles = (process.env.HET_CONAN_PROFILES ?? '').split(';').filter((p) => p.length > 0);
+  const profiles = [...configured, ...envProfiles];
+
+  log(`[conan] ${conanExe} create . (Debug) in ${project.root}${profiles.length ? ` profiles=${profiles.join(',')}` : ''}`);
+  const summary = await runConanCreate(
+    conanExe,
+    project.root,
+    { buildType: 'Debug', profiles },
+    {
+      onStdout: (c) => channel?.append(c),
+      onStderr: (c) => channel?.append(c),
+      timeoutMs: 0,
+    },
+  );
+  lastConanOutput = `${summary.stdout}\n${summary.stderr}`;
+  channel?.appendLine('');
+  return { ok: summary.ok, stdout: summary.stdout, stderr: summary.stderr };
+}
+
 /** Run `conan create` for the current project; map diagnostics to the Problems panel. */
 async function buildProject(): Promise<void> {
   const project = currentProject;
@@ -115,39 +159,99 @@ async function buildProject(): Promise<void> {
     void vscode.window.showWarningMessage('未检测到 fcpp 项目：请先打开含 metadata.json 的库文件夹。');
     return;
   }
+  buildDiagnostics.clear();
 
-  const conanExe = await locateConan();
-  if (!conanExe) {
-    void vscode.window.showErrorMessage(
-      '找不到 conan。请先安装 Python + Conan（pip install conan; conan profile detect --force）。',
-    );
+  let result: { ok: boolean; stdout: string; stderr: string };
+  try {
+    result = await executeConan(project);
+  } catch (err) {
+    void vscode.window.showErrorMessage(err instanceof Error ? err.message : String(err));
     return;
   }
 
-  buildDiagnostics.clear();
-  log(`[build] ${conanExe} create . (Debug) in ${project.root}`);
-
-  const summary = await runConanCreate(
-    conanExe,
-    project.root,
-    { buildType: 'Debug' },
-    {
-      onStdout: (c) => channel?.append(c),
-      onStderr: (c) => channel?.append(c),
-      timeoutMs: 0,
-    },
-  );
-  channel?.appendLine('');
-
-  const issues = parseCompilerOutput(`${summary.stdout}\n${summary.stderr}`);
+  const issues = parseCompilerOutput(`${result.stdout}\n${result.stderr}`);
   mapIssues(issues, project.root);
-  log(`[build] finished ok=${summary.ok} issues=${issues.length}`);
+  log(`[build] finished ok=${result.ok} issues=${issues.length}`);
+  lastBuildOk = result.ok;
 
-  if (summary.ok) {
+  if (result.ok) {
     void vscode.window.showInformationMessage(`构建成功 — ${project.metadata.name} (Debug)`);
   } else {
     const detail = issues.length > 0 ? `${issues.length} 个错误/警告，详见“问题”面板` : '详见“输出 → HeT DevTools”';
     void vscode.window.showErrorMessage(`构建失败：${detail}`);
+  }
+}
+
+/** Run `conan create` (includes the test package step) and show a parsed test view. */
+async function runTests(): Promise<void> {
+  const project = currentProject;
+  if (!project || !project.metadata) {
+    void vscode.window.showWarningMessage('未检测到 fcpp 项目：请先打开含 metadata.json 的库文件夹。');
+    return;
+  }
+
+  let result: { ok: boolean; stdout: string; stderr: string };
+  try {
+    result = await executeConan(project);
+  } catch (err) {
+    lastConanOutput = err instanceof Error ? err.message : String(err);
+    void vscode.window.showErrorMessage(err instanceof Error ? err.message : String(err));
+    return;
+  }
+
+  const fullOutput = `${result.stdout}\n${result.stderr}`;
+  const issues = parseCompilerOutput(fullOutput);
+  mapIssues(issues, project.root);
+
+  lastBuildOk = result.ok;
+  lastTestSummary = parseGTestOutput(fullOutput);
+  log(`[test] ok=${result.ok} gtest=${JSON.stringify({ p: lastTestSummary.passed, f: lastTestSummary.failed, s: lastTestSummary.skipped })}`);
+
+  if (!result.ok) {
+    void vscode.window.showErrorMessage('构建/测试失败：先修复构建错误（见问题面板），再重新测试。');
+    return;
+  }
+  if (lastTestSummary.empty) {
+    void vscode.window.showInformationMessage(
+      '构建成功，但未捕获到 GTest 用例。请确认 metadata.json 的 trigger_tests=true 且 test_package/test/unit 下有测试。',
+    );
+    return;
+  }
+  void vscode.window.showInformationMessage(
+    `测试完成：通过 ${lastTestSummary.passed} · 失败 ${lastTestSummary.failed} · 跳过 ${lastTestSummary.skipped}`,
+  );
+  showTestResults(contextRef, lastTestSummary);
+}
+
+function showStoredTestResults(context: vscode.ExtensionContext): void {
+  if (!lastTestSummary) {
+    void vscode.window.showInformationMessage('尚无测试结果。先运行：HeT DevTools: 构建并测试。');
+    return;
+  }
+  showTestResults(context, lastTestSummary);
+}
+
+let contextRef: vscode.ExtensionContext;
+
+function showTestResults(context: vscode.ExtensionContext, summary: GTestRunSummary): void {
+  contextRef = context;
+  showTestResultsPanel(context, summary, {
+    runTests: () => void runTests(),
+    openFile: (file, line) => openFileAt(file, line),
+  });
+}
+
+/** Open a (possibly relative) file at a 1-based line. */
+async function openFileAt(file: string, line: number): Promise<void> {
+  const root = currentProject?.root;
+  const abs = isAbsolute(file) ? file : root ? join(root, file) : file;
+  try {
+    const doc = await vscode.workspace.openTextDocument(abs);
+    const editor = await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.One });
+    const pos = new vscode.Position(Math.max(0, line - 1), 0);
+    editor.revealRange(new vscode.Range(pos, pos));
+  } catch (err) {
+    void vscode.window.showWarningMessage(`无法打开 ${abs}：${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

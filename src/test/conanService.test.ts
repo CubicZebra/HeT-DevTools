@@ -4,13 +4,13 @@ import { conanCreateArgs, locateConan } from '../core/conanService';
 describe('conanService.conanCreateArgs', () => {
   it('native Debug build with --build=missing (canonical form)', () => {
     assert.deepStrictEqual(conanCreateArgs(), [
-      'create', '.', '-s build_type=Debug', '--build=missing',
+      'create', '.', '-s', 'build_type=Debug', '--build=missing',
     ]);
   });
 
   it('Release build', () => {
     const args = conanCreateArgs({ buildType: 'Release' });
-    assert.ok(args.includes('-s build_type=Release'));
+    assert.ok(args.includes('build_type=Release'));
   });
 
   it('cross-build adds host profile and disables test folder', () => {
@@ -18,6 +18,13 @@ describe('conanService.conanCreateArgs', () => {
     assert.ok(args.includes('-pr:b=default'));
     assert.ok(args.includes('-pr:h=arm_profile'));
     assert.ok(args.includes('-tf=""'));
+  });
+
+  it('appends extra -pr profile files', () => {
+    const args = conanCreateArgs({ profiles: ['C:/dev/profile.txt'] });
+    const idx = args.indexOf('-pr');
+    assert.ok(idx >= 0);
+    assert.strictEqual(args[idx + 1], 'C:/dev/profile.txt');
   });
 
   it('keeps test package when testFolder is null (default)', () => {
