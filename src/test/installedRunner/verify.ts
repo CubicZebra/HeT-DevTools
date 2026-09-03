@@ -52,6 +52,9 @@ export async function run(): Promise<void> {
     const meta = JSON.parse(readFileSync(join(PROJ, 'metadata.json'), 'utf8')) as Record<string, unknown>;
     assert.strictEqual(meta.name, 'verifylib');
     assert.strictEqual(meta.build_type, 'Release');
+    if (process.platform === 'win32') {
+      assert.strictEqual(meta.activate_code_coverage, false, 'coverage must default off on Windows/MSVC');
+    }
     assert.ok(existsSync(join(PROJ, '.het', 'template-ref.json')), 'marker written');
     assert.ok(existsSync(join(PROJ, 'include', 'cpptest.hpp')), 'template tree copied');
 
@@ -68,6 +71,28 @@ export async function run(): Promise<void> {
     assert.strictEqual(r2.ok, true, 'default pinned init must auto-fallback: ' + r2.message);
     assert.ok(existsSync(join(dest2, 'metadata.json')), 'default-init project on disk');
     console.log('[verify-installed] empty-phase OK — chip + offline bundled + default auto-fallback');
+  } else if (phase === 'scrub') {
+    // Simulates the user's real shell: a plain PowerShell PATH with NO conda.
+    // The extension must sniff the conda env itself and then build for real.
+    assert.ok(!(process.env.PATH ?? '').toLowerCase().includes('miniforge'), 'test PATH must be scrubbed first');
+    assert.ok(!(process.env.PATH ?? '').toLowerCase().includes('miniconda'), 'test PATH must be scrubbed first');
+    const rt = (await vscode.commands.executeCommand('het.getConanRuntime')) as {
+      exe?: string;
+      envName?: string;
+      pathPrefix?: string;
+      version?: string;
+    } | null;
+    assert.ok(rt, 'conan runtime must be sniffed with no conda on PATH');
+    assert.ok(rt.exe && rt.envName, 'runtime must resolve to a conda env: ' + JSON.stringify(rt));
+    console.log('[verify-installed] sniffed conan: ' + rt.exe + ' (env ' + rt.envName + ', ' + (rt.version ?? '?') + ')');
+    await vscode.commands.executeCommand('het.build');
+    const buildOk = await vscode.commands.executeCommand<boolean | null>('het.getBuildOk');
+    if (buildOk !== true) {
+      const tail = (await vscode.commands.executeCommand<string>('het.getLastConanOutput')) ?? '';
+      console.log('[verify-installed] build output tail:\n' + tail.slice(-2000));
+    }
+    assert.strictEqual(buildOk, true, 'real conan build must succeed from a scrubbed PATH (conda sniffed)');
+    console.log('[verify-installed] scrub-phase OK — sniffed conda env + real conan build green');
   } else {
     assert.ok(PROJ.length > 0, 'HET_VERIFY_DEST required');
     const name = await vscode.commands.executeCommand<string | null>('het.getCurrentProject');

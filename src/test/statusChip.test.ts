@@ -9,6 +9,7 @@ const projectModel = (over: Partial<ChipModel> = {}): ChipModel => ({
   lastBuildOk: true,
   test: { passed: 7, failed: 0, skipped: 1 },
   templateBehind: 0,
+  conanEnv: 'conda env build',
   ...over,
 });
 
@@ -52,13 +53,19 @@ describe('statusChip (V2-1 invisible chip)', () => {
     assert.ok(s.tooltip.includes('未运行'));
   });
   it('invites project creation on an empty workspace', () => {
-    const s = chipSpec({ projectName: '', workspaceEmpty: true, health: null, running: null, lastBuildOk: null, test: null, templateBehind: 0 });
+    const s = chipSpec({ projectName: '', workspaceEmpty: true, health: null, running: null, lastBuildOk: null, test: null, templateBehind: 0, conanEnv: null });
     assert.ok(s);
     assert.ok(s!.text.includes('新建 fcpp'));
     assert.strictEqual(s!.command, 'het.newProject');
   });
   it('is completely invisible for a non-empty non-fcpp workspace', () => {
-    const s = chipSpec({ projectName: '', workspaceEmpty: false, health: null, running: null, lastBuildOk: null, test: null, templateBehind: 0 });
+    const s = chipSpec({ projectName: '', workspaceEmpty: false, health: null, running: null, lastBuildOk: null, test: null, templateBehind: 0, conanEnv: null });
     assert.strictEqual(s, null);
+  });
+  it('reports the sniffed conan environment, or a warning when missing', () => {
+    const s = chipSpec(projectModel())!;
+    assert.ok(s.tooltip.includes('conda env build'));
+    const missing = chipSpec(projectModel({ conanEnv: null }))!;
+    assert.ok(missing.tooltip.includes('未找到 conan'));
   });
 });

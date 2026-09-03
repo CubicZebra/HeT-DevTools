@@ -339,4 +339,17 @@ describe('cockpit.polish (P-G5)', () => {
     assert.ok(!/codicon/.test(beforeAction));
     assert.ok(html.includes('codicon-new-file'));
   });
+  it('overview renders the sniffed conan runtime line', () => {
+    const html = buildPageContentHtml('overview', {
+      tools: [],
+      lastBuildOk: null,
+      lastTest: null,
+      runtime: { version: 'Conan 2.16.1', envName: 'build' },
+    });
+    assert.ok(html.includes('构建运行时'));
+    assert.ok(html.includes('Conan 2.16.1'));
+    assert.ok(html.includes('conda env build'));
+    const missing = buildPageContentHtml('overview', { tools: [], lastBuildOk: null, lastTest: null, runtime: null });
+    assert.ok(missing.includes('未找到 conan'));
+  });
 });

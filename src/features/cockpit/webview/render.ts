@@ -44,6 +44,8 @@ export interface OverviewPayload {
   tools: ToolChip[];
   lastBuildOk: boolean | null;
   lastTest: TestSummaryPayload | null;
+  /** Sniffed conan runtime (conda env / PATH / null). */
+  runtime?: { version?: string; envName?: string } | null;
 }
 
 export interface BuildTestPayload {
@@ -112,11 +114,15 @@ function statusMark(ok: boolean | null | undefined): string {
 function overviewContent(p: OverviewPayload): string {
   const health = p.healthScore === undefined ? '' : `<span class="chip ${p.healthScore >= 80 ? 'ok' : p.healthScore >= 50 ? 'warn' : 'fail'}">健康分 ${p.healthScore}</span>`;
   const tools = p.tools.map((t) => `<span class="status">${t.ok ? '✓' : '✗'} ${esc(t.name)}</span>`).join(' ');
+  const runtime = p.runtime
+    ? `<div class="status">构建运行时：conan ${esc(p.runtime.version ?? '')} · ${esc(p.runtime.envName ? `conda env ${p.runtime.envName}` : 'PATH')} · 自动嗅探</div>`
+    : '<div class="status">构建运行时：未找到 conan（已嗅探 conda 常见根目录）</div>';
   return `<div class="row">${health}</div>
     <div class="grid">
       <div class="card"><div class="ct">最近构建</div><div class="cv">${statusMark(p.lastBuildOk)} ${p.lastBuildOk === null ? '未运行' : p.lastBuildOk ? '成功' : '失败'}</div></div>
       <div class="card"><div class="ct">最近测试</div><div class="cv">${p.lastTest ? `${statusMark((p.lastTest.failed ?? 0) === 0)} ${p.lastTest.passed ?? 0}/${(p.lastTest.failed ?? 0) + (p.lastTest.passed ?? 0)}` : '未运行'}</div></div>
     </div>
+    ${runtime}
     <div class="row">${tools}</div>
     <div class="actions">
       <button class="primary" data-cmd="het.test"><i class="codicon codicon-play"></i>构建并测试</button>

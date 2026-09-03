@@ -1,8 +1,8 @@
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, delimiter } from 'node:path';
 import { existsSync } from 'node:fs';
 import * as vscode from 'vscode';
 import { EXTENSION_ID, LOG_CHANNEL_NAME, log, setOutputChannel } from './constants';
-import { locateConan, runConanCreate } from './core/conanService';
+import { locateConan, runConanCreate, resolveConanRuntime } from './core/conanService';
 import { parseGTestOutput, GTestRunSummary } from './core/gtestRunner';
 import { runHealthCheck } from './core/healthCheck';
 import { CURATED_PACKAGES } from './data/conanIndex';
@@ -72,6 +72,40 @@ let lastHealth: { score: number; at: number } | undefined;
 let onboardingNotified = false;
 let lastChip: { text: string; tooltip: string; command?: string } | null = null;
 const isTestHost = process.argv.some((a) => a.includes('--extensionTestsPath'));
+
+/** Sniffed conan runtime (conda env + PATH emulation), cached 30 s. */
+let conanRuntime: { exe: string; envName?: string; pathPrefix?: string; version?: string; at: number } | null = null;
+
+async function ensureConanRuntime(): Promise<typeof conanRuntime> {
+  if (conanRuntime && Date.now() - conanRuntime.at < 30_000) {
+    return conanRuntime;
+  }
+  const r = await resolveConanRuntime();
+  if (!r) {
+    conanRuntime = null;
+    return null;
+  }
+  const rt = r.runtime;
+  if (rt?.pathPrefix && !(process.env.PATH ?? '').includes(rt.envDir)) {
+    process.env.PATH = `${rt.pathPrefix}${delimiter}${process.env.PATH ?? ''}`;
+    log(`[conda] emulated activate of env '${rt.envName}' for child toolchains (${rt.envDir})`);
+  }
+  let version = '';
+  const v = await run(r.exe, ['--version'], { timeoutMs: 15000 }).catch(() => null);
+  if (v && v.code === 0) {
+    version = v.stdout.split(/\r?\n/)[0].trim();
+  }
+  conanRuntime = {
+    exe: r.exe,
+    envName: rt?.envName,
+    pathPrefix: rt?.pathPrefix,
+    version,
+    at: Date.now(),
+  };
+  log(`[conda] conan=${r.exe} env=${rt?.envName ?? 'PATH'} version=${version}`);
+  await refreshChip();
+  return conanRuntime;
+}
 const buildDiagnostics = vscode.languages.createDiagnosticCollection('het-build');
 
 /**
@@ -136,6 +170,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // P-G2: feed cockpit pages with live host data (overview / build-test first).
   setCockpitPageProvider('overview', async () => {
     const snap = await buildSnapshot();
+    const rt = await ensureConanRuntime();
     return {
       projectName: currentProject?.metadata?.name,
       version: currentProject?.metadata?.version,
@@ -146,6 +181,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       lastTest: lastTestSummary
         ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped }
         : null,
+      runtime: rt ? { version: rt.version, envName: rt.envName } : null,
     };
   });
   setCockpitPageProvider('buildTest', async () => ({
@@ -435,6 +471,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.getCockpitPage', () => getCockpitState().page),
     vscode.commands.registerCommand('het.getCockpitState', () => getCockpitState()),
     vscode.commands.registerCommand('het.getChipState', () => lastChip),
+    vscode.commands.registerCommand('het.getConanRuntime', async () => ensureConanRuntime()),
     vscode.commands.registerCommand('het.refresh', () => refreshStatus()),
     vscode.commands.registerCommand('het.build', () => { track('build'); return buildProject(); }),
     vscode.commands.registerCommand('het.dashboard', (section?: string) => openDashboard(context, section)),
@@ -2321,15 +2358,39 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
     return { ok: false, message: `复制模板失败：${err instanceof Error ? err.message : String(err)}` };
   }
 
+  // Windows compat: CTest's LastTest.log carries GBK bytes (MSVC runtime writes
+  // cp936), but the template reads it as strict UTF-8 → UnicodeDecodeError in
+  // the test package. Patch the COPY only (upstream template stays pristine).
+  if (process.platform === 'win32') {
+    const cf = join(dest, 'test_package', 'conanfile.py');
+    if (await pathExists(cf)) {
+      const txt = await readText(cf);
+      const patched = txt.replaceAll("open(report, 'r', encoding='utf-8')", "open(report, 'r', encoding='utf-8', errors='replace')");
+      if (patched !== txt) {
+        await writeText(cf, patched);
+        log('[init] Windows compat patch applied: test_package/conanfile.py (GBK LastTest.log)');
+      }
+    }
+  }
+
   // record template ref for T-4.7
   await writeText(join(dest, markerPath()), encodeMarker({ repo, ref: markerRef, label }));
 
   // rewrite identity fields (preview/confirm happens in the wizard)
-  const applied = await applyMetadataPatch(
-    dest,
-    { name, description: opts.description ?? name, ...(opts.metadataExtra ?? {}) },
-    { persist: true },
-  );
+  const metadataPatch: Record<string, unknown> = {
+    name,
+    description: opts.description ?? name,
+    ...(opts.metadataExtra ?? {}),
+  };
+  let coverageNote = '';
+  // MSVC has no GCC-style coverage instrumentation; the template default is
+  // enable=true (GCC/Linux CI), which would make a fresh Windows project fail
+  // at CMake configure. Default it off here unless the caller opted in.
+  if (process.platform === 'win32' && metadataPatch.activate_code_coverage === undefined) {
+    metadataPatch.activate_code_coverage = false;
+    coverageNote = '\n（已默认关闭代码覆盖率：Windows/MSVC 不支持 --coverage，可在 metadata.json 手动开启）';
+  }
+  const applied = await applyMetadataPatch(dest, metadataPatch, { persist: true });
   if (!applied.ok) {
     return { ok: false, message: `metadata 改写失败：${applied.issues.map((i) => i.message).join('；')}` };
   }
@@ -2350,7 +2411,7 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
   }
   const suffix = fallbackNote ? `\n${fallbackNote}` : '';
   log(`[init] project created @ ${dest} (template ${label})${suffix}`);
-  return { ok: true, message: `已从模板创建项目 ${name} @ ${dest}\n（模板源：${label}${suffix}，已记录到 .het/template-ref.json）`, root: dest };
+  return { ok: true, message: `已从模板创建项目 ${name} @ ${dest}\n（模板源：${label}${suffix}，已记录到 .het/template-ref.json）${coverageNote}`, root: dest };
 }
 
 /** User-facing init wizard (G-21): collects identity, preview, confirm, run. */
@@ -2527,6 +2588,7 @@ async function refreshStatus(): Promise<void> {
   await refreshChip();
   // Health is comparatively expensive: refresh at most once a minute, lazily.
   void ensureHealthCached(false);
+  void ensureConanRuntime();
 }
 
 /** Whether the open workspace folder is truly empty (used for the ＋ hint). */
@@ -2565,6 +2627,7 @@ async function refreshChip(): Promise<void> {
       ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped }
       : null,
     templateBehind: st.top.templateBehind,
+    conanEnv: conanRuntime ? (conanRuntime.envName ? `conda env ${conanRuntime.envName}` : 'PATH') : null,
   });
   if (!spec) {
     statusItem.hide();
@@ -2661,9 +2724,12 @@ async function emitTemplateBehind(): Promise<void> {
 
 /** Run `conan create` in the project and stream everything to the output channel. */
 async function runConanOnce(project: FcppProject): Promise<{ ok: boolean; stdout: string; stderr: string }> {
-  const conanExe = await locateConan();
+  const rt = await ensureConanRuntime();
+  const conanExe = rt?.exe ?? (await locateConan());
   if (!conanExe) {
-    throw new Error('找不到 conan。请先安装 Python + Conan（pip install conan; conan profile detect --force）。');
+    throw new Error(
+      '找不到 conan。已自动嗅探 conda 环境（miniforge/miniconda/anaconda 的 envs）仍无结果。\n请安装 Conan（pip install conan; conan profile detect --force），或设置 het.template.localPath / HET_TEMPLATE_LOCAL 类配置，或将其所在环境加入 PATH。',
+    );
   }
 
   // Dev-machine adaptations (NOT shipped defaults): extra -pr profiles may be

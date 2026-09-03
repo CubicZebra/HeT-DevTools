@@ -28,6 +28,8 @@ export interface ChipModel {
   lastBuildOk: boolean | null;
   test: ChipTest | null;
   templateBehind: number;
+  /** Sniffed conan runtime description (e.g. 'conda env build' / 'PATH' / null). */
+  conanEnv: string | null;
 }
 
 export interface ChipSpec {
@@ -65,6 +67,7 @@ export function chipSpec(m: ChipModel): ChipSpec | null {
         : '- 模板与参考一致';
     const healthLine = `- 健康分 ${m.health === null ? '未体检' : `${m.health}/100`} · ${link('一键体检', 'het.healthCheck')}`;
     const runningLine = m.running ? `- 运行中：${m.running}` : '';
+    const conanLine = m.conanEnv ? `- conan ✓ ${m.conanEnv}` : '- ⚠ 未找到 conan（构建暂不可用）';
     const actionLine = `${link('打开仪表盘', 'het.dashboard')} · ${link('构建并测试', 'het.test')} · ${link('新建项目', 'het.newProject')}`;
     const lines = [
       `**HeT DevTools — ${m.projectName}**`,
@@ -72,6 +75,7 @@ export function chipSpec(m: ChipModel): ChipSpec | null {
       buildLine,
       testLine,
       templateLine,
+      conanLine,
       runningLine,
       `---`,
       actionLine,

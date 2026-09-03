@@ -84,4 +84,28 @@ console.log('[verify-installed] empty-phase host exited cleanly');
 process.env.HET_VERIFY_PHASE = 'proj';
 await runTests(launch(proj, 'proj'));
 console.log('[verify-installed] proj-phase host exited cleanly');
+
+// 3) scrub phase: a plain PowerShell PATH (no conda anywhere) — the extension
+//    must sniff the conda env by itself and run a real `conan create`.
+const saved = {
+  PATH: process.env.PATH,
+  CONDA_EXE: process.env.CONDA_EXE,
+  CONDA_PREFIX: process.env.CONDA_PREFIX,
+  MAMBA_ROOT_PREFIX: process.env.MAMBA_ROOT_PREFIX,
+};
+delete process.env.CONDA_EXE;
+delete process.env.CONDA_PREFIX;
+delete process.env.MAMBA_ROOT_PREFIX;
+const defaultProfile = join(process.env.USERPROFILE ?? 'C:/Users/Chen', '.conan2', 'profiles', 'default');
+const c1Profile = join(root, 'out', 'c1-profile2.txt');
+process.env.HET_CONAN_PROFILES = defaultProfile + ';' + c1Profile;
+process.env.PATH = [join(root, 'out', 'binutils'), 'C:/Windows/System32', 'C:/Windows'].join(';');
+process.env.HET_VERIFY_PHASE = 'scrub';
+await runTests(launch(proj, 'scrub'));
+console.log('[verify-installed] scrub-phase host exited cleanly');
+process.env.PATH = saved.PATH;
+if (saved.CONDA_EXE !== undefined) { process.env.CONDA_EXE = saved.CONDA_EXE; }
+if (saved.CONDA_PREFIX !== undefined) { process.env.CONDA_PREFIX = saved.CONDA_PREFIX; }
+if (saved.MAMBA_ROOT_PREFIX !== undefined) { process.env.MAMBA_ROOT_PREFIX = saved.MAMBA_ROOT_PREFIX; }
+
 console.log('[verify-installed] ALL OK — installed vsix verified with zero manual interaction');

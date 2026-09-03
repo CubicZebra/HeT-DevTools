@@ -44,6 +44,9 @@ fcpp 模板用 Conan / CMake / CI / Doxygen / semantic-release 把工程保障�
 - **点击 chip** → 打开仪表盘概览；空工作区时点击直接进入新建项目向导。
 - 其余全部功能藏于命令面板 / QuickPick / `@het` Chat，按需出现、零打扰。
 
+## 环境自动嗅探（conda 完整性）
+
+默认 PowerShell 里没有 conan 时，扩展自动嗅探 conda 环境（miniforge / miniconda / anaconda、~/.conda/envs、ProgramData 等）：找到含 conan 的环境（优先 build）后，自动把其 Scripts / Library/bin / condabin 注入子进程 PATH，等价于已执行 conda activate。嗅探结果显示在仪表盘概览分区（“构建运行时：conan X · conda env build”）与状态栏 chip 悬停概况。Windows 上新项目默认关闭代码覆盖率（MSVC 不支持），并自动对测试包做 GBK 兼容补丁。
 ## 离线新建项目（内置模板）
 
 扩展自带 fcpp 模板快照（约 2 MB，打包进 vsix）。即使完全断网，也能在空工作区通过「＋ 新建 fcpp 项目」创建标准工程：在线源不可用时自动回退 内置模板 → workspace/fcpp 开发副本（开发者仓库）→ het.template.localPath → HET_TEMPLATE_LOCAL，降级都会明确提示并写入 .het/template-ref.json。
