@@ -18,6 +18,7 @@ const integration = args.includes('--integration');
 const c1 = args.includes('--c1');
 const c2 = args.includes('--c2');
 const c3 = args.includes('--c3');
+const c4 = args.includes('--c4');
 
 /** @type {import('esbuild').BuildOptions} */
 const common = {
@@ -105,6 +106,15 @@ function buildOptions() {
       ...common,
       entryPoints: [join(srcDir, 'test', 'integration', 'c3.ts')],
       outfile: join(outDir, 'test-integration', 'c3.js'),
+    });
+  }
+
+  // 7) C4 end-to-end check (Phase-4 journey: template init → update → audit)
+  if (c4) {
+    options.push({
+      ...common,
+      entryPoints: [join(srcDir, 'test', 'integration', 'c4.ts')],
+      outfile: join(outDir, 'test-integration', 'c4.js'),
     });
   }
   return options;
