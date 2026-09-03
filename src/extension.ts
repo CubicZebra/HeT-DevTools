@@ -1,4 +1,4 @@
-import { isAbsolute, join, delimiter } from 'node:path';
+import { isAbsolute, join, dirname, delimiter } from 'node:path';
 import { existsSync } from 'node:fs';
 import * as vscode from 'vscode';
 import { EXTENSION_ID, LOG_CHANNEL_NAME, log, setOutputChannel } from './constants';
@@ -49,6 +49,7 @@ import { GithubAuthService, createGhAuthChecker, AuthInfo } from './core/githubA
 import { renderAuditMarkdown, AuditInput } from './core/auditReport';
 import { renderSearchQuery, renderTechDisclosure, PatentInput } from './core/patent';
 import { resolveTemplateSource, resolveCloneRef } from './core/templateService';
+import { discoverTools, TOOL_DEFS, ToolRow } from './core/toolchainDiscovery';
 import { TEMPLATE_REPO } from './core/templateDefaults';
 import { encodeMarker, parseMarker, parseCommitList, renderSyncPlan, markerPath } from './core/templateSync';
 import { FcppMetadata, FcppProject, ParsedIssue } from './types';
@@ -75,6 +76,94 @@ const isTestHost = process.argv.some((a) => a.includes('--extensionTestsPath'));
 
 /** Sniffed conan runtime (conda env + PATH emulation), cached 30 s. */
 let conanRuntime: { exe: string; envName?: string; pathPrefix?: string; version?: string; at: number } | null = null;
+/** Generic toolchain discovery (multi-source), cached 60 s. */
+let toolRowsCache: { rows: ToolRow[]; at: number } | null = null;
+
+function toolOverridesConfig(): Record<string, string> {
+  return vscode.workspace.getConfiguration('het').get<Record<string, string>>('tools', {});
+}
+
+function prependPathDir(dir: string): void {
+  if (!dir || (process.env.PATH ?? '').includes(dir)) {
+    return;
+  }
+  process.env.PATH = `${dir}${delimiter}${process.env.PATH ?? ''}`;
+  log(`[tools] PATH += ${dir}`);
+}
+
+async function applyToolOverrides(): Promise<void> {
+  for (const p of Object.values(toolOverridesConfig())) {
+    if (p && existsSync(p)) {
+      prependPathDir(dirname(p));
+    }
+  }
+}
+
+/**
+ * Generic discovery: PATH → conda/mamba envs → uv → venv → (WSL info).
+ * Found dirs are injected into the child PATH so existing `which()`-based
+ * flows (docs / quality / build) automatically see conda-forge tools.
+ */
+async function ensureToolDiscovery(force = false): Promise<ToolRow[]> {
+  if (!force && toolRowsCache && Date.now() - toolRowsCache.at < 60_000) {
+    return toolRowsCache.rows;
+  }
+  const rows = await discoverTools({ overrides: toolOverridesConfig(), wsl: true });
+  toolRowsCache = { rows, at: Date.now() };
+  for (const r of rows) {
+    if (r.source === 'missing' || r.overridden || r.informational || r.source === 'path') {
+      continue;
+    }
+    prependPathDir(dirname(r.exe));
+  }
+  await applyToolOverrides();
+  await refreshChip();
+  return rows;
+}
+
+/** Manual override flow from the dashboard env block (low mental load). */
+async function handleEnvManualAction(action: string, tool: string): Promise<void> {
+  const def = TOOL_DEFS.find((d) => d.key === tool);
+  if (!def) {
+    return;
+  }
+  const current = toolOverridesConfig();
+  if (action === 'env:clear') {
+    if (current[tool]) {
+      const next = { ...current };
+      delete next[tool];
+      await vscode.workspace.getConfiguration('het').update('tools', next, vscode.ConfigurationTarget.Global);
+      await applyToolOverrides();
+      void ensureToolDiscovery(true);
+      void vscode.window.showInformationMessage(`已清除 ${def.label} 的手动指定，恢复自动嗅探。`);
+    }
+    return;
+  }
+  const pick = await vscode.window.showInputBox({
+    title: `${def.label} · 手动指定`, 
+    prompt: '可执行文件绝对路径（留空 = 清除手动指定）',
+    value: current[tool] ?? '',
+    ignoreFocusOut: true,
+  });
+  if (pick === undefined) {
+    return;
+  }
+  const v = pick.trim();
+  const next = { ...current };
+  if (v) {
+    if (!existsSync(v)) {
+      void vscode.window.showWarningMessage(`路径不存在：${v}`);
+      return;
+    }
+    next[tool] = v;
+  } else {
+    delete next[tool];
+  }
+  await vscode.workspace.getConfiguration('het').update('tools', next, vscode.ConfigurationTarget.Global);
+  await applyToolOverrides();
+  await ensureToolDiscovery(true);
+  void vscode.window.showInformationMessage(v ? `已手动指定 ${def.label} = ${v}（已写入 het.tools.${tool} 并注入工具链）` : `已清除 ${def.label} 手动指定。`);
+}
 
 async function ensureConanRuntime(): Promise<typeof conanRuntime> {
   if (conanRuntime && Date.now() - conanRuntime.at < 30_000) {
@@ -171,6 +260,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   setCockpitPageProvider('overview', async () => {
     const snap = await buildSnapshot();
     const rt = await ensureConanRuntime();
+    const envRows = await ensureToolDiscovery();
     return {
       projectName: currentProject?.metadata?.name,
       version: currentProject?.metadata?.version,
@@ -182,6 +272,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped }
         : null,
       runtime: rt ? { version: rt.version, envName: rt.envName } : null,
+      envRows,
     };
   });
   setCockpitPageProvider('buildTest', async () => ({
@@ -359,6 +450,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       lastBenchParse = { complete: parsed.complete, cases: parsed.cases.map((c) => [c.name, String(c.value)] as [string, string]) };
     }
   });
+  setCockpitPageHandler('overview', async (action, data) => {
+    if (action === 'env:set' || action === 'env:clear') {
+      await handleEnvManualAction(action, (data.tool ?? '').trim());
+    }
+  });
 
   // P-G4: five-step onboarding wizard facts + finish handler.
   {
@@ -472,6 +568,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.getCockpitState', () => getCockpitState()),
     vscode.commands.registerCommand('het.getChipState', () => lastChip),
     vscode.commands.registerCommand('het.getConanRuntime', async () => ensureConanRuntime()),
+    vscode.commands.registerCommand('het.getEnvRows', async () => ensureToolDiscovery()),
     vscode.commands.registerCommand('het.refresh', () => refreshStatus()),
     vscode.commands.registerCommand('het.build', () => { track('build'); return buildProject(); }),
     vscode.commands.registerCommand('het.dashboard', (section?: string) => openDashboard(context, section)),
@@ -2589,6 +2686,7 @@ async function refreshStatus(): Promise<void> {
   // Health is comparatively expensive: refresh at most once a minute, lazily.
   void ensureHealthCached(false);
   void ensureConanRuntime();
+  void ensureToolDiscovery();
 }
 
 /** Whether the open workspace folder is truly empty (used for the ＋ hint). */

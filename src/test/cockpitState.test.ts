@@ -352,4 +352,20 @@ describe('cockpit.polish (P-G5)', () => {
     const missing = buildPageContentHtml('overview', { tools: [], lastBuildOk: null, lastTest: null, runtime: null });
     assert.ok(missing.includes('未找到 conan'));
   });
+  it('overview renders the env/toolchain block with manual-override rows', () => {
+    const html = buildPageContentHtml('overview', {
+      tools: [],
+      lastBuildOk: null,
+      lastTest: null,
+      envRows: [
+        { key: 'doxygen', label: 'Doxygen', exe: 'C:/x/doxygen.exe', source: 'conda', sourceDetail: 'conda env build', overridden: false },
+        { key: 'graphviz', label: 'Graphviz (dot)', exe: '', source: 'missing', sourceDetail: '', overridden: false },
+        { key: 'lcov', label: 'LCOV', exe: '/usr/bin/lcov', source: 'wsl', sourceDetail: 'WSL（LCOV）· 仅 WSL 内可用', overridden: false, informational: true },
+      ],
+    });
+    assert.ok(html.includes('环境与工具链'));
+    assert.ok(html.includes('data-page-action="env:set"'));
+    assert.ok(html.includes('conda env build'));
+    assert.ok(html.includes('仅 WSL 内可用'));
+  });
 });

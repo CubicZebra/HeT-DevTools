@@ -44,7 +44,12 @@ fcpp 模板用 Conan / CMake / CI / Doxygen / semantic-release 把工程保障�
 - **点击 chip** → 打开仪表盘概览；空工作区时点击直接进入新建项目向导。
 - 其余全部功能藏于命令面板 / QuickPick / `@het` Chat，按需出现、零打扰。
 
-## 环境自动嗅探（conda 完整性）
+## 通用工具链发现（多来源 · 可失败 · 可手动指定）
+
+默认 PowerShell 里找不到工具时，扩展自动多来源嗅探：PATH → conda/mamba 环境（含 base、`~/.conda/envs`、ProgramData 等，优先语义化环境名 build/dev/het）→ uv（`~/.local/share/uv`）→ 工作区 venv；Windows 上还会报告 WSL 内可用的 gcc/g++/make/lcov/gcovr（信息性，不混入 Windows 构建）。找到后自动把对应目录注入子进程 PATH，让 conan 构建、文档（doxygen/graphviz）、质量（clang-format 等）开箱即用。
+
+嗅探**允许失败**：仪表盘概览「环境与工具链」分区逐项显示 ✓/✗ 与来源；未找到的项可点「手动指定」填可执行文件路径（写入 het.tools.* 并即时生效），或点「清除」恢复自动嗅探。一切无需命令行。
+
 
 默认 PowerShell 里没有 conan 时，扩展自动嗅探 conda 环境（miniforge / miniconda / anaconda、~/.conda/envs、ProgramData 等）：找到含 conan 的环境（优先 build）后，自动把其 Scripts / Library/bin / condabin 注入子进程 PATH，等价于已执行 conda activate。嗅探结果显示在仪表盘概览分区（“构建运行时：conan X · conda env build”）与状态栏 chip 悬停概况。Windows 上新项目默认关闭代码覆盖率（MSVC 不支持），并自动对测试包做 GBK 兼容补丁。
 ## 离线新建项目（内置模板）

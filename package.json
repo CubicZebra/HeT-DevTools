@@ -60,6 +60,14 @@
           "type": "string",
           "default": "",
           "description": "Local fcpp template directory for offline project init (falls back to HET_TEMPLATE_LOCAL, then workspace/fcpp when present)."
+        },
+        "het.tools": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Manual toolchain overrides: het.tools.<name> = absolute executable path (e.g. conan, cmake, doxygen, graphviz/dot, clang-format). Set from the dashboard '环境与工具链' block."
         }
       }
     },

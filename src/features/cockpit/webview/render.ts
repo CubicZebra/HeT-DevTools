@@ -8,6 +8,7 @@
 import { esc } from '../../ui';
 import { PAGES, CockpitPage } from '../layout';
 import { CockpitState, CockpitWizard } from '../state';
+import type { ToolRow } from '../../../core/toolchainDiscovery';
 
 export interface CockpitAssets {
   codiconCss: string;
@@ -46,6 +47,8 @@ export interface OverviewPayload {
   lastTest: TestSummaryPayload | null;
   /** Sniffed conan runtime (conda env / PATH / null). */
   runtime?: { version?: string; envName?: string } | null;
+  /** Generic toolchain discovery rows (V2 env block). */
+  envRows?: ToolRow[];
 }
 
 export interface BuildTestPayload {
@@ -111,6 +114,34 @@ function statusMark(ok: boolean | null | undefined): string {
   return ok ? '✓' : '✗';
 }
 
+function envBlockHtml(rows: ToolRow[]): string {
+  if (!rows.length) {
+    return '';
+  }
+  const items = rows
+    .map((r) => {
+      const mark = r.source === 'missing' ? '✗' : r.informational ? '~' : '✓';
+      const exeBase = r.exe ? r.exe.split(/[\\/]/).pop() : '';
+      const src =
+        r.source === 'missing'
+          ? '未找到（安装后点重新嗅探，或手动指定）'
+          : r.source === 'override'
+            ? r.exe
+            : r.informational
+              ? `${r.sourceDetail}`
+              : `${r.sourceDetail} · ${exeBase}`;
+      const btn = `<button class="textbtn" data-page-action="env:set" data-arg-tool="${esc(r.key)}">手动指定</button>`;
+      const clear = r.overridden ? `<button class="textbtn" data-page-action="env:clear" data-arg-tool="${esc(r.key)}">清除</button>` : '';
+      return `<div class="drow"><span class="dk">${mark} ${esc(r.label)}</span><span class="dv dim">${esc(src)}</span><span class="dv">${btn}${clear}</span></div>`;
+    })
+    .join('');
+  return `<details class="mini" open>
+    <summary class="mini-head">环境与工具链（自动嗅探 · 可手动指定）</summary>
+    ${items}
+    <div class="status">来源：PATH / conda / mamba / uv / venv / WSL（~ 信息性）· 手动指定写入 het.tools.*，构建·文档·质量自动生效。</div>
+  </details>`;
+}
+
 function overviewContent(p: OverviewPayload): string {
   const health = p.healthScore === undefined ? '' : `<span class="chip ${p.healthScore >= 80 ? 'ok' : p.healthScore >= 50 ? 'warn' : 'fail'}">健康分 ${p.healthScore}</span>`;
   const tools = p.tools.map((t) => `<span class="status">${t.ok ? '✓' : '✗'} ${esc(t.name)}</span>`).join(' ');
@@ -123,6 +154,7 @@ function overviewContent(p: OverviewPayload): string {
       <div class="card"><div class="ct">最近测试</div><div class="cv">${p.lastTest ? `${statusMark((p.lastTest.failed ?? 0) === 0)} ${p.lastTest.passed ?? 0}/${(p.lastTest.failed ?? 0) + (p.lastTest.passed ?? 0)}` : '未运行'}</div></div>
     </div>
     ${runtime}
+    ${envBlockHtml(p.envRows ?? [])}
     <div class="row">${tools}</div>
     <div class="actions">
       <button class="primary" data-cmd="het.test"><i class="codicon codicon-play"></i>构建并测试</button>
@@ -472,6 +504,11 @@ export function buildCockpitHtml(
   .dsec-head i { width: 16px; }
   .dsec-head .hint { font-weight: 400; opacity: .55; font-size: 11px; margin-left: 4px; }
   .dsec-body { padding: 4px 14px 12px; }
+  details.mini { margin: 8px 0; border: 1px solid var(--vscode-widget-border,#2b2b2b); border-radius: 6px; }
+  .mini-head { padding: 6px 10px; cursor: pointer; font-size: 12px; font-weight: 600;
+    list-style: none; background: var(--vscode-editorWidget-background); border-radius: 6px; }
+  .mini-head::-webkit-details-marker, .mini-head::marker { display: none; content: ''; }
+  details.mini .drow { padding: 3px 10px; }
   .grid { display: flex; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
   .page h1 { font-size: 17px; margin: 0 0 2px; }
   .page .sub { opacity: .7; font-size: 12px; margin-bottom: 10px; }
