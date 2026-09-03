@@ -9,6 +9,7 @@ import { detectProjectsIn } from './core/projectDetector';
 import { detectToolchain } from './core/toolchainDetector';
 import { showDashboardPanel } from './features/dashboard/panel';
 import { showDepsPanel, DepAddInput } from './features/deps/panel';
+import { ModulePanelInput, showModuleWizardPanel } from './features/moduleWizard/panel';
 import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
 import { DashboardSnapshot } from './features/ui';
@@ -18,8 +19,9 @@ import {
   listDependencies,
   removeDependency,
 } from './core/dependencyService';
+import { planModuleFiles } from './core/moduleTemplate';
 import { applyMetadataPatch, loadMetadata } from './core/metadataService';
-import { readText, writeJson, writeText } from './utils/fs';
+import { pathExists, readText, writeJson, writeText } from './utils/fs';
 import { FcppMetadata, FcppProject, ParsedIssue } from './types';
 
 let channel: vscode.OutputChannel | undefined;
@@ -69,6 +71,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.openSettings', () => openSettingsPanel(context)),
     vscode.commands.registerCommand('het.openDeps', () => openDepsPanel(context)),
     vscode.commands.registerCommand('het.addDependency', () => openDepsPanel(context)),
+    vscode.commands.registerCommand('het.newModule', () => openModuleWizard(context)),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
@@ -188,6 +191,65 @@ function openDepsPanel(context: vscode.ExtensionContext): void {
       await refreshStatus();
     },
   });
+}
+
+/** New-module wizard (G-08): live preview then create the paired skeleton. */
+function openModuleWizard(context: vscode.ExtensionContext): void {
+  const toPlanInput = (input: ModulePanelInput) => ({
+    moduleName: input.moduleName,
+    description: input.description,
+    language: input.language,
+    since: input.since,
+    extraDeclarations: (input.extraDeclarations ?? '')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0),
+  });
+
+  const plan = async (input: ModulePanelInput) => {
+    const p = planModuleFiles(toPlanInput(input));
+    const conflicts: string[] = [];
+    if (p.ok && currentProject) {
+      for (const f of p.files) {
+        if (await pathExists(join(currentProject.root, f.relPath))) {
+          conflicts.push(f.relPath);
+        }
+      }
+    }
+    return { plan: p, conflicts };
+  };
+
+  const create = async (input: ModulePanelInput) => {
+    const root = currentProject?.root;
+    if (!root) {
+      return { ok: false, message: '未检测到 fcpp 项目。' };
+    }
+    const p = planModuleFiles(toPlanInput(input));
+    if (!p.ok) {
+      return { ok: false, message: `无法生成：${p.issues.join('；')}` };
+    }
+    const existing: string[] = [];
+    for (const f of p.files) {
+      if (await pathExists(join(root, f.relPath))) {
+        existing.push(f.relPath);
+      }
+    }
+    if (existing.length > 0) {
+      return { ok: false, message: `以下文件已存在，请先删除或改名：${existing.join('、')}` };
+    }
+    const labels = p.files.map((f) => f.relPath).join(' 与 ');
+    const choice = await vscode.window.showWarningMessage(`创建 ${labels}？`, { modal: true }, '创建', '取消');
+    if (choice !== '创建') {
+      return { ok: false, message: '已取消' };
+    }
+    for (const f of p.files) {
+      await writeText(join(root, f.relPath), f.content);
+    }
+    await refreshStatus();
+    return { ok: true, message: `已创建 ${labels}。可在命令行运行“构建”或继续添加测试。` };
+  };
+
+  showModuleWizardPanel(context, { plan, create });
 }
 
 /** Settings editor (G-17): preview + confirm + backup write of metadata.json. */

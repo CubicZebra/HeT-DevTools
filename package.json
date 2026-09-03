@@ -94,6 +94,10 @@
       {
         "command": "het.addDependency",
         "title": "HeT DevTools: 添加依赖"
+      },
+      {
+        "command": "het.newModule",
+        "title": "HeT DevTools: 新增模块"
       }
     ]
   },
