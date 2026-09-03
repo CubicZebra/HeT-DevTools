@@ -122,6 +122,18 @@
       {
         "command": "het.commit",
         "title": "HeT DevTools: 提交助手"
+      },
+      {
+        "command": "het.commitRelease",
+        "title": "HeT DevTools: 提交助手（预填发版 📦）"
+      },
+      {
+        "command": "het.release",
+        "title": "HeT DevTools: 发布中心"
+      },
+      {
+        "command": "het.preflight",
+        "title": "HeT DevTools: 发布前检查（Preflight）"
       }
     ]
   },

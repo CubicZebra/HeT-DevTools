@@ -15,6 +15,8 @@ import { CoverageState, showCoveragePanel } from './features/coverage/panel';
 import { DocsState, DocToolStatus, showDocsPanel } from './features/docs/panel';
 import { QualityRow, QualityRunResult, showQualityPanel } from './features/quality/panel';
 import { CommitRequest, CommitState, showCommitPanel } from './features/commit/panel';
+import { ReleaseState, showReleasePanel } from './features/release/panel';
+import { PreflightState, PreflightItem, showPreflightPanel } from './features/preflight/panel';
 import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
 import { DashboardSnapshot } from './features/ui';
@@ -28,7 +30,7 @@ import {
 import { planModuleFiles } from './core/moduleTemplate';
 import { planModuleTests, scanHeader } from './core/testgen';
 import { parseBlueprint, renderContractTest, renderImplementationPlan } from './core/testgenModeB';
-import { composeHeader, defaultEmoji, parsePorcelain, suggestType } from './core/commitAssistant';
+import { composeHeader, defaultEmoji, parsePorcelain, suggestType, TRIGGER_EMOJIS } from './core/commitAssistant';
 import { applyMetadataPatch, loadMetadata, validateMetadata, hasErrors } from './core/metadataService';
 import { formatConfigForFile, parseClangFormatOutput, parseClangTidyOutput, lintCommitHeader, collectHeaders, QualityIssue } from './core/qualityGates';
 import { pathExists, readText, writeJson, writeText } from './utils/fs';
@@ -92,6 +94,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.docs', () => openDocsPanel(context)),
     vscode.commands.registerCommand('het.quality', () => openQualityPanel(context)),
     vscode.commands.registerCommand('het.commit', () => openCommitPanel(context)),
+    vscode.commands.registerCommand('het.commitRelease', () => openCommitPanel(context, { type: 'chore', emoji: ':package:', subject: 'bump version' })),
+    vscode.commands.registerCommand('het.release', () => openReleasePanel(context)),
+    vscode.commands.registerCommand('het.preflight', () => openPreflightPanel(context)),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
@@ -905,7 +910,7 @@ function openQualityPanel(context: vscode.ExtensionContext): void {
 }
 
 /** Commit assistant (G-16): dual-channel conventional commits, preview + confirm. */
-function openCommitPanel(context: vscode.ExtensionContext): void {
+function openCommitPanel(context: vscode.ExtensionContext, prefill?: { type: string; emoji: string | null; subject: string }): void {
   const gitRun = async (args: string[], cwd: string) => {
     const git = await which('git');
     if (!git) {
@@ -917,7 +922,7 @@ function openCommitPanel(context: vscode.ExtensionContext): void {
   const getState = async (): Promise<CommitState> => {
     const root = currentProject?.root;
     if (!root || !currentProject?.metadata) {
-      return { projectName: '', branch: '', changes: [], triggers: {}, buildType: '', triggerTests: false, suggestedType: 'chore', suggestedEmojiId: null };
+      return { projectName: '', branch: '', changes: [], triggers: {}, buildType: '', triggerTests: false, suggestedType: 'chore', suggestedEmojiId: null, initialSubject: '' };
     }
     const meta = await loadMetadata(root);
     const triggers: Record<string, boolean> = { ...(meta.workflow_triggers ?? {}) };
@@ -930,12 +935,15 @@ function openCommitPanel(context: vscode.ExtensionContext): void {
       branch = br ? br.stdout.trim() : '';
     }
     const paths = changes.map((c) => c.path);
-    const suggestedType = suggestType(paths);
-    const emoji = defaultEmoji(suggestedType, {
-      triggers,
-      buildType: meta.build_type ?? 'Debug',
-      triggerTests: meta.trigger_tests === true,
-    });
+    const suggestedType = prefill?.type ?? suggestType(paths);
+    const emoji =
+      prefill?.type && prefill.emoji !== undefined
+        ? { id: TRIGGER_EMOJIS.find((t) => t.emoji === prefill.emoji)?.id ?? '', emoji: prefill.emoji }
+        : defaultEmoji(suggestedType as never, {
+            triggers,
+            buildType: meta.build_type ?? 'Debug',
+            triggerTests: meta.trigger_tests === true,
+          });
     return {
       projectName: currentProject.metadata.name ?? '',
       branch,
@@ -945,6 +953,7 @@ function openCommitPanel(context: vscode.ExtensionContext): void {
       triggerTests: meta.trigger_tests === true,
       suggestedType,
       suggestedEmojiId: emoji?.id ?? null,
+      initialSubject: prefill?.subject ?? '',
     };
   };
 
@@ -1000,6 +1009,244 @@ function openCommitPanel(context: vscode.ExtensionContext): void {
   };
 
   showCommitPanel(context, { getState, commit });
+}
+
+/** Release center (G-12): workflow_triggers.release + guided 📦 flow. */
+function openReleasePanel(context: vscode.ExtensionContext): void {
+  const getState = async (): Promise<ReleaseState> => {
+    const root = currentProject?.root;
+    if (!root || !currentProject?.metadata) {
+      return { projectName: '', version: '', buildType: '', releaseOn: false, docsOn: false, changelogExists: false, changelogHead: '', hasRemote: false };
+    }
+    const meta = await loadMetadata(root);
+    const triggers: Record<string, boolean> = { ...(meta.workflow_triggers ?? {}) };
+    let changelogHead = '';
+    let changelogExists = false;
+    const cl = join(root, 'CHANGELOG.md');
+    if (await pathExists(cl)) {
+      changelogExists = true;
+      try {
+        changelogHead = (await readText(cl)).slice(0, 2000);
+      } catch {
+        /* ignore */
+      }
+    }
+    let hasRemote = false;
+    const git = await which('git');
+    if (git) {
+      const r = await run(git, ['-C', root, 'remote', 'get-url', 'origin']).catch(() => null);
+      hasRemote = !!r && r.code === 0 && r.stdout.trim().length > 0;
+    }
+    return {
+      projectName: currentProject.metadata.name ?? '',
+      version: meta.version ?? '',
+      buildType: meta.build_type ?? '',
+      releaseOn: triggers.release === true,
+      docsOn: triggers.docs === true,
+      changelogExists,
+      changelogHead,
+      hasRemote,
+    };
+  };
+
+  const toggleRelease = async () => {
+    const root = currentProject?.root;
+    if (!root) {
+      return { ok: false, message: '未检测到 fcpp 项目。' };
+    }
+    const meta = await loadMetadata(root);
+    const triggers: Record<string, boolean> = { ...(meta.workflow_triggers ?? {}) };
+    triggers.release = true;
+    const choice = await vscode.window.showWarningMessage(
+      `开启发布：写入 workflow_triggers.release=true 并将 build_type 设为 Release？\n（发布不可回滚，CI 收到 📦 提交后自动发版）`,
+      { modal: true },
+      '开启',
+      '取消',
+    );
+    if (choice !== '开启') {
+      return { ok: false, message: '已取消' };
+    }
+    const applied = await applyMetadataPatch(root, { workflow_triggers: triggers, build_type: 'Release' }, { persist: true });
+    if (applied.ok) {
+      await refreshStatus();
+      return { ok: true, message: '已开启发布（备份 .bak）。用「提交助手并预填 📦」发起发布提交。' };
+    }
+    return { ok: false, message: `写入失败：${applied.issues.map((i) => i.message).join('；')}` };
+  };
+
+  showReleasePanel(context, {
+    getState,
+    toggleRelease,
+    openCommitRelease: async () => {
+      await vscode.commands.executeCommand('het.commitRelease');
+    },
+    openChangelog: async () => {
+      const root = currentProject?.root;
+      if (root) {
+        void vscode.window.showTextDocument(vscode.Uri.file(join(root, 'CHANGELOG.md')), { preview: true });
+      }
+    },
+  });
+}
+
+/** Pre-release gate (G-13): checklist aligned with CI gates. */
+function openPreflightPanel(context: vscode.ExtensionContext): void {
+  const getState = async (): Promise<PreflightState> => {
+    const root = currentProject?.root;
+    const items: PreflightItem[] = [];
+    if (!root || !currentProject?.metadata) {
+      return { projectName: '', items: [], passed: 0, total: 0, allowRelease: false };
+    }
+    const meta = await loadMetadata(root);
+
+    // 1) build (session evidence)
+    items.push({
+      label: '构建成功',
+      ok: lastBuildOk === undefined ? undefined : lastBuildOk,
+      detail: lastBuildOk === undefined ? '本会话尚未构建 → 点击「运行构建并测试」' : lastBuildOk ? '最近一次构建成功' : '最近一次构建失败',
+      required: true,
+    });
+    // 2) tests (session evidence)
+    items.push({
+      label: '测试全绿',
+      ok: lastTestSummary ? lastTestSummary.failed === 0 && lastTestSummary.passed > 0 : undefined,
+      detail: lastTestSummary
+        ? `通过 ${lastTestSummary.passed} · 失败 ${lastTestSummary.failed} · 跳过 ${lastTestSummary.skipped}`
+        : '本会话尚未运行测试',
+      required: true,
+    });
+
+    // 3) quality (format quick + schema + commitlint)
+    const tool = await which('clang-format');
+    const files = await (async () => {
+      const { readdir } = await import('node:fs/promises');
+      const out: { abs: string; fam: 'c' | 'cpp' }[] = [];
+      for (const sub of ['include', 'src']) {
+        try {
+          for (const n of await readdir(join(root, sub))) {
+            const fam = formatConfigForFile(`${sub}/${n}`);
+            if (fam) {
+              out.push({ abs: join(root, sub, n), fam });
+            }
+          }
+        } catch {
+          /* missing dir */
+        }
+      }
+      return out;
+    })();
+    let formatOk: boolean | undefined;
+    if (tool && files.length > 0) {
+      let allOk = true;
+      for (const fam of ['c', 'cpp'] as const) {
+        const famFiles = files.filter((f) => f.fam === fam).map((f) => f.abs);
+        if (famFiles.length === 0) {
+          continue;
+        }
+        const cfg = join(root, `.github/misc/.clang-format-${fam}`);
+        if (!(await pathExists(cfg))) {
+          allOk = false;
+          break;
+        }
+        const res = await run(tool, ['--dry-run', '--Werror', `--style=file:${cfg}`, ...famFiles], { cwd: root });
+        if (res.code !== 0) {
+          allOk = false;
+        }
+      }
+      formatOk = allOk;
+    }
+    let schemaOk = true;
+    const schemaIssues = validateMetadata(meta);
+    if (hasErrors(schemaIssues)) {
+      schemaOk = false;
+    }
+    let commitOk = true;
+    const git = await which('git');
+    if (git) {
+      const res = await run(git, ['-C', root, 'log', '--format=%s', '-n', '10']);
+      for (const h of collectHeaders(res.stdout)) {
+        if (!lintCommitHeader(h).ok) {
+          commitOk = false;
+        }
+      }
+    }
+    const qualityOk = formatOk === true && schemaOk && commitOk;
+    items.push({
+      label: '质量门禁（format/schema/commitlint）',
+      ok: formatOk === undefined ? undefined : qualityOk,
+      detail:
+        formatOk === undefined
+          ? 'clang-format 不可用或配置缺失 → 在质量面板查看'
+          : qualityOk
+            ? '格式/配置/提交规范均绿'
+            : `格式：${formatOk ? '绿' : '红'} · schema：${schemaOk ? '绿' : '红'} · commitlint：${commitOk ? '绿' : '红'}`,
+      required: false,
+    });
+
+    // 4) docs tools (advisory)
+    const docsNeed = ['python', 'doxygen', 'dot', 'sphinx-build'];
+    const missing: string[] = [];
+    if (process.platform === 'win32' && !(await which('make'))) {
+      missing.push('make');
+    }
+    for (const d of docsNeed) {
+      if (!(await which(d))) {
+        missing.push(d);
+      }
+    }
+    items.push({
+      label: '文档可生成（工具齐全）',
+      ok: missing.length === 0,
+      detail: missing.length ? `缺少：${missing.join('、')}` : 'Doxygen/Sphinx/Graphviz 齐备',
+      required: false,
+    });
+
+    // 5) working tree clean
+    let clean = true;
+    if (git) {
+      const res = await run(git, ['-C', root, 'status', '--porcelain']);
+      clean = res.stdout.trim().length === 0;
+    }
+    items.push({
+      label: '无未提交变更',
+      ok: clean,
+      detail: clean ? '工作区干净' : '存在未提交变更（先提交助手收尾）',
+      required: true,
+    });
+
+    // 6) CHANGELOG present
+    const changelogExists = await pathExists(join(root, 'CHANGELOG.md'));
+    items.push({ label: 'CHANGELOG.md 就绪', ok: changelogExists, detail: changelogExists ? undefined : '发布时由 semantic-release 自动生成', required: true });
+
+    // 7) metadata switches (advisory)
+    const triggers: Record<string, boolean> = { ...(meta.workflow_triggers ?? {}) };
+    items.push({
+      label: '发布开关与 build_type=Release',
+      ok: triggers.release === true && (meta.build_type ?? '') === 'Release',
+      detail: `release=${triggers.release === true} · build_type=${meta.build_type ?? ''}`,
+      required: false,
+    });
+
+    const total = items.filter((i) => i.ok !== undefined).length;
+    const passed = items.filter((i) => i.ok === true).length;
+    const allowRelease = items.filter((i) => i.required).every((i) => i.ok === true);
+    return { projectName: currentProject.metadata.name ?? '', items, passed, total, allowRelease };
+  };
+
+  showPreflightPanel(context, {
+    getState,
+    runTests: async () => {
+      await vscode.commands.executeCommand('het.test');
+      const ok = lastBuildOk === true && lastTestSummary?.failed === 0 && (lastTestSummary?.passed ?? 0) > 0;
+      return { ok, message: ok ? '构建与测试全绿。' : '构建或测试未全绿，请查看结果面板。' };
+    },
+    openQuality: async () => {
+      await vscode.commands.executeCommand('het.quality');
+    },
+    openRelease: async () => {
+      await vscode.commands.executeCommand('het.release');
+    },
+  });
 }
 
 /** Settings editor (G-17): preview + confirm + backup write of metadata.json. */

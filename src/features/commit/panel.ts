@@ -12,6 +12,7 @@ export interface CommitState {
   triggerTests: boolean;
   suggestedType: string;
   suggestedEmojiId: string | null;
+  initialSubject: string;
 }
 
 export interface CommitRequest {
@@ -117,7 +118,7 @@ function buildHtml(state: CommitState): string {
       <select id="type">${typeOptions}</select>
       <div class="row" style="flex-wrap:wrap">${cards}</div>
       <div class="row"><label class="tag2"><input type="checkbox" id="breaking"> breaking（! 主版本 +1）</label></div>
-      <input type="text" id="subject" placeholder="一句话描述（英文佳）" value="" />
+      <input type="text" id="subject" placeholder="一句话描述（英文佳）" value="${esc(state.initialSubject)}" />
       <h2>预览</h2>
       <div class="preview" id="preview"></div>
       <div class="row">
