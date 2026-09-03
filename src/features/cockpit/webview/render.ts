@@ -11,6 +11,14 @@ import { CockpitState, CockpitWizard } from '../state';
 
 export interface CockpitAssets {
   codiconCss: string;
+  lang?: CockpitLang;
+}
+
+export type CockpitLang = 'zh' | 'en';
+
+/** Chrome-only i18n (page content stays on the zh base per the plan). */
+function t(lang: CockpitLang, zh: string, en: string): string {
+  return lang === 'en' ? en : zh;
 }
 
 /* ------------------------------------------------------------------ *
@@ -223,31 +231,33 @@ export function renderWizardRegion(
   wizard: CockpitWizard | null,
   info: CockpitWizardInfo,
   draft: Record<string, string>,
+  lang: CockpitLang = 'zh',
 ): string {
   if (!wizard) {
     return '';
   }
   const dots = WIZARD_STEPS.map((label, i) => {
     const cls = i + 1 === wizard.step ? 'cur' : i + 1 < wizard.step ? 'done' : '';
-    return `<span class="wstep ${cls}">${i + 1} ${esc(label)}</span>`;
+    const localized = t(lang, label, ['Template', 'Identity', 'Build', 'Switches', 'Confirm'][i]);
+    return `<span class="wstep ${cls}">${i + 1} ${esc(localized)}</span>`;
   }).join('');
 
   const row = (k: string, v: string): string => `<div class="srow"><span class="sk">${esc(k)}</span><span class="sv">${esc(v)}</span></div>`;
   let body = '';
   if (wizard.step === 1) {
     body = `<div class="slist">
-      ${row('模板仓库', info.templateRepo)}
-      ${row('固定 ref', info.templateRef)}
-      ${row('模板源', info.modeLabel)}
+      ${row(t(lang, '模板仓库', 'Template repo'), info.templateRepo)}
+      ${row(t(lang, '固定 ref', 'Pinned ref'), info.templateRef)}
+      ${row(t(lang, '模板源', 'Source'), info.modeLabel)}
     </div>
-    <div class="status">新项目将从模板复制骨架 → 改写 metadata.json（name/description）→ git init + 基线提交 → 记录 .het/template-ref.json。</div>`;
+    <div class="status">${t(lang, '新项目将从模板复制骨架 → 改写 metadata.json（name/description）→ git init + 基线提交 → 记录 .het/template-ref.json。', 'Copy the template skeleton → rewrite metadata.json (name/description) → git init + baseline commit → record .het/template-ref.json.')}</div>`;
   } else if (wizard.step === 2) {
     body = `<form data-wizard="submit">
-      <label>项目名（字母/数字/下划线/连字符）
+      <label>${t(lang, '项目名（字母/数字/下划线/连字符）', 'Project name (letters/digits/_/-)')}
         <input name="name" value="${esc(draft.name ?? '')}" placeholder="my-lib" required>
       </label>
-      <label>描述
-        <input name="description" value="${esc(draft.description ?? '')}" placeholder="一句话描述">
+      <label>${t(lang, '描述', 'Description')}
+        <input name="description" value="${esc(draft.description ?? '')}" placeholder="${t(lang, '一句话描述', 'one-line description')}">
       </label>
     </form>`;
   } else if (wizard.step === 3) {
@@ -282,22 +292,22 @@ export function renderWizardRegion(
   } else {
     const dest = joinWeb(draft.name ?? 'my-lib', info.parentDir);
     body = `<div class="slist">
-      ${row('项目名', draft.name ?? '—')}
-      ${row('目标目录', dest)}
-      ${row('模板源', info.modeLabel)}
-      ${row('构建参数', `${draft.buildType ?? 'Debug'} · C++${draft.cppstd ?? '17'}`)}
-      ${row('Python 绑定', draft.pybind === 'yes' ? '开启' : '关闭')}
+      ${row(t(lang, '项目名', 'Project'), draft.name ?? '—')}
+      ${row(t(lang, '目标目录', 'Destination'), dest)}
+      ${row(t(lang, '模板源', 'Source'), info.modeLabel)}
+      ${row(t(lang, '构建参数', 'Build params'), `${draft.buildType ?? 'Debug'} · C++${draft.cppstd ?? '17'}`)}
+      ${row(t(lang, 'Python 绑定', 'Python bindings'), draft.pybind === 'yes' ? t(lang, '开启', 'On') : t(lang, '关闭', 'Off'))}
     </div>
-    <div class="status">确认后将：复制模板 → 改写 metadata.json（备份 .bak）→ git init + 基线提交 → 记录模板 ref。离线环境使用本地模板副本。</div>`;
+    <div class="status">${t(lang, '确认后将：复制模板 → 改写 metadata.json（备份 .bak）→ git init + 基线提交 → 记录模板 ref。离线环境使用本地模板副本。', 'Will: copy template → rewrite metadata.json (.bak backup) → git init + baseline commit → record template ref. Offline uses the local template copy.')}</div>`;
   }
 
   const err = wizard.error ? `<div class="warn">${esc(wizard.error)}</div>` : '';
-  const back = wizard.step > 1 ? `<button data-wizard="prev">上一步</button>` : '';
+  const back = wizard.step > 1 ? `<button data-wizard="prev">${t(lang, '上一步', 'Back')}</button>` : '';
   const next =
-    wizard.step < 5 ? `<button class="primary" data-wizard="next">下一步</button>` : `<button class="primary" data-wizard="finish">创建项目</button>`;
+    wizard.step < 5 ? `<button class="primary" data-wizard="next">${t(lang, '下一步', 'Next')}</button>` : `<button class="primary" data-wizard="finish">${t(lang, '创建项目', 'Create project')}</button>`;
   return `<div class="wiz-mask">
     <div class="wiz-box">
-      <div class="wiz-head"><span class="wiz-title">新项目向导</span><button class="textbtn" data-wizard="close">✕</button></div>
+      <div class="wiz-head"><span class="wiz-title">${t(lang, '新项目向导', 'New project wizard')}</span><button class="textbtn" data-wizard="close">✕</button></div>
       <div class="wiz-dots">${dots}</div>
       ${body}
       ${err}
@@ -321,12 +331,12 @@ function railHtml(active: CockpitPage): string {
   ).join('');
 }
 
-function topHtml(s: CockpitState): string {
-  const health = s.top.health === null ? '' : `<span class="chip ${s.top.health >= 80 ? 'ok' : s.top.health >= 50 ? 'warn' : 'fail'}">健康分 ${s.top.health}</span>`;
-  const tpl = s.top.templateBehind > 0 ? `<span class="chip warn">●模板可更新 ${s.top.templateBehind}</span>` : '';
+function topHtml(s: CockpitState, lang: CockpitLang = 'zh'): string {
+  const health = s.top.health === null ? '' : `<span class="chip ${s.top.health >= 80 ? 'ok' : s.top.health >= 50 ? 'warn' : 'fail'}">${t(lang, '健康分', 'Health')} ${s.top.health}</span>`;
+  const tpl = s.top.templateBehind > 0 ? `<span class="chip warn">${t(lang, '●模板可更新', '● Template update')} ${s.top.templateBehind}</span>` : '';
   const run = s.top.running ? `<span class="chip running"><span class="spin">●</span> ${esc(s.top.running)}</span>` : '';
   const name = s.top.projectName ? `<span class="proj"><i class="codicon codicon-package"></i>${esc(s.top.projectName)}</span>` : '<span class="proj dim">HeT DevTools</span>';
-  const np = `<button class="chip action" data-wizard="open">＋ 新项目</button>`;
+  const np = `<button class="chip action" data-wizard="open">${t(lang, '＋ 新项目', '+ New project')}</button>`;
   return `${name}${health}${tpl}${run}<span class="flex"></span>${np}`;
 }
 
@@ -354,8 +364,8 @@ function mainHtml(s: CockpitState): string {
   </section>`;
 }
 
-function drawerHtml(s: CockpitState): string {
-  const collapsed = `日志 · 问题 · 向导`;
+function drawerHtml(s: CockpitState, lang: CockpitLang = 'zh'): string {
+  const collapsed = t(lang, '日志 · 问题 · 向导', 'Log · Issues · Wizard');
   if (!s.drawer.expanded) {
     return `<div class="drawer collapsed" data-toggle="drawer"><span class="caret">▸</span> ${esc(collapsed)}</div>`;
   }
@@ -378,6 +388,7 @@ export function buildCockpitHtml(
   wizardInfo?: CockpitWizardInfo,
   wizardDraft?: Record<string, string>,
 ): string {
+  const lang: CockpitLang = assets.lang ?? 'zh';
   return `<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -474,13 +485,13 @@ export function buildCockpitHtml(
 </style>
 </head>
 <body>
-  <div class="top" id="top">${topHtml(s)}</div>
+  <div class="top" id="top">${topHtml(s, lang)}</div>
   <div class="body">
     <nav class="rail" id="rail">${railHtml(s.page)}</nav>
     <main class="main" id="main">${mainHtml(s)}</main>
   </div>
-  <div id="drawer">${drawerHtml(s)}</div>
-  <div id="wizard">${renderWizardRegion(s.wizard, wizardInfo ?? { templateRepo: '', templateRef: '', modeLabel: '', parentDir: '' }, wizardDraft ?? {})}</div>
+  <div id="drawer">${drawerHtml(s, lang)}</div>
+  <div id="wizard">${renderWizardRegion(s.wizard, wizardInfo ?? { templateRepo: '', templateRef: '', modeLabel: '', parentDir: '' }, wizardDraft ?? {}, lang)}</div>
   <script>
     (function () {
       const vscode = acquireVsCodeApi();
@@ -551,6 +562,9 @@ export function buildCockpitHtml(
 }
 
 /** Render just the mutable regions (top/rail/main/drawer) from a state. */
-export function renderCockpitRegions(s: CockpitState): { top: string; rail: string; main: string; drawer: string } {
-  return { top: topHtml(s), rail: railHtml(s.page), main: mainHtml(s), drawer: drawerHtml(s) };
+export function renderCockpitRegions(
+  s: CockpitState,
+  lang: CockpitLang = 'zh',
+): { top: string; rail: string; main: string; drawer: string } {
+  return { top: topHtml(s, lang), rail: railHtml(s.page), main: mainHtml(s), drawer: drawerHtml(s, lang) };
 }

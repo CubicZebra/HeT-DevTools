@@ -421,6 +421,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.hasProject', () => currentProject !== undefined),
     vscode.commands.registerCommand('het.cockpit', () => openCockpitPanel(context)),
     vscode.commands.registerCommand('het.getCockpitPage', () => getCockpitState().page),
+    vscode.commands.registerCommand('het.getCockpitState', () => getCockpitState()),
     vscode.commands.registerCommand('het.refresh', () => refreshStatus()),
     vscode.commands.registerCommand('het.build', () => { track('build'); return buildProject(); }),
     vscode.commands.registerCommand('het.welcome', () => openWelcome(context)),

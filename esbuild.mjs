@@ -19,6 +19,7 @@ const c1 = args.includes('--c1');
 const c2 = args.includes('--c2');
 const c3 = args.includes('--c3');
 const c4 = args.includes('--c4');
+const c5 = args.includes('--c5');
 
 /** @type {import('esbuild').BuildOptions} */
 const common = {
@@ -115,6 +116,15 @@ function buildOptions() {
       ...common,
       entryPoints: [join(srcDir, 'test', 'integration', 'c4.ts')],
       outfile: join(outDir, 'test-integration', 'c4.js'),
+    });
+  }
+
+  // 8) C5 cockpit check (P-G5: empty workspace → wizard auto-open; project → clean state)
+  if (c5) {
+    options.push({
+      ...common,
+      entryPoints: [join(srcDir, 'test', 'integration', 'c5.ts')],
+      outfile: join(outDir, 'test-integration', 'c5.js'),
     });
   }
   return options;

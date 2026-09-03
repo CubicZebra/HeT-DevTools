@@ -215,7 +215,8 @@
     "test:c2": "npm run compile && node esbuild.mjs --c2 && node scripts/run-c2.mjs",
     "test:c3": "npm run compile && node esbuild.mjs --c3 && node scripts/run-c3.mjs",
     "test:c4": "npm run compile && node esbuild.mjs --c4 && node scripts/run-c4.mjs",
-    "package": "vsce package --no-dependencies"
+    "package": "vsce package --no-dependencies",
+    "test:c5": "npm run compile && node esbuild.mjs --c5 && node scripts/run-c5.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

@@ -227,3 +227,87 @@ describe('cockpit.render', () => {
     assert.strictEqual(none, '');
   });
 });
+
+describe('cockpit.polish (P-G5)', () => {
+  const info = { templateRepo: 'r', templateRef: 'f', modeLabel: 'm', parentDir: 'p' };
+  it('renders English chrome when assets.lang=en', () => {
+    const html = buildCockpitHtml(s0, { codiconCss: '', lang: 'en' });
+    assert.ok(html.includes('+ New project'));
+    assert.ok(html.includes('Log · Issues · Wizard'));
+    const w = renderWizardRegion({ step: 1 }, info, {}, 'en');
+    assert.ok(w.includes('New project wizard'));
+    assert.ok(w.includes('Template repo'));
+    assert.ok(w.includes('Next'));
+  });
+  it('keeps Chinese chrome by default', () => {
+    const html = buildCockpitHtml(s0, { codiconCss: '' });
+    assert.ok(html.includes('＋ 新项目'));
+    assert.ok(html.includes('日志 · 问题 · 向导'));
+  });
+  it('top strip shows the template badge only when behind > 0', () => {
+    const s = reduceCockpit(s0, { type: 'template:update', behind: 3 });
+    const regions = renderCockpitRegions(s);
+    assert.ok(regions.top.includes('模板可更新'));
+    assert.ok(regions.top.includes('3'));
+    assert.ok(!renderCockpitRegions(s0).top.includes('模板可更新'));
+  });
+  it('health chip tiers: >=80 ok, >=50 warn, else fail', () => {
+    const hi = renderCockpitRegions(reduceCockpit(s0, { type: 'health', score: 90 })).top;
+    const mid = renderCockpitRegions(reduceCockpit(s0, { type: 'health', score: 60 })).top;
+    const lo = renderCockpitRegions(reduceCockpit(s0, { type: 'health', score: 20 })).top;
+    assert.ok(hi.includes('chip ok'));
+    assert.ok(mid.includes('chip warn'));
+    assert.ok(lo.includes('chip fail'));
+  });
+  it('issues drawer renders the title and a problems-panel button', () => {
+    const s = reduceCockpit(s0, { type: 'issue:summary', count: 2 });
+    const regions = renderCockpitRegions(s);
+    assert.ok(regions.drawer.includes('2 个错误'));
+    assert.ok(regions.drawer.includes('workbench.actions.view.problems'));
+  });
+  it('wizard steps 3/4 render build + switch selects with draft preselection', () => {
+    const w3 = renderWizardRegion({ step: 3 }, info, { buildType: 'Release', cppstd: '20' });
+    assert.ok(w3.includes('value="Release" selected'));
+    assert.ok(w3.includes('value="20" selected'));
+    const w4 = renderWizardRegion({ step: 4 }, info, { pybind: 'yes' });
+    assert.ok(w4.includes('value="yes" selected'));
+  });
+  it('wizard prev button appears only after step 1', () => {
+    assert.ok(!renderWizardRegion({ step: 1 }, info, {}).includes('data-wizard="prev"'));
+    assert.ok(renderWizardRegion({ step: 2 }, info, {}).includes('data-wizard="prev"'));
+  });
+  it('summary note is escaped', () => {
+    const html = buildPageContentHtml('release', {
+      rows: [['k', 'v']],
+      actions: [],
+      note: '<img src=x onerror=alert(1)>',
+    });
+    assert.ok(html.includes('&lt;img'));
+    assert.ok(!html.includes('<img'));
+  });
+  it('overview renders tools with ✓/✗ status marks', () => {
+    const html = buildPageContentHtml('overview', {
+      tools: [
+        { name: 'conan', ok: true },
+        { name: 'cmake', ok: false },
+      ],
+      lastBuildOk: null,
+      lastTest: null,
+    });
+    assert.ok(html.includes('✓ conan'));
+    assert.ok(html.includes('✗ cmake'));
+  });
+  it('buildTest page reports the no-run state', () => {
+    const html = buildPageContentHtml('buildTest', { lastBuildOk: null, lastTest: null });
+    assert.ok(html.includes('未运行'));
+  });
+  it('summary sub-rows stay icon-free while primary buttons carry one codicon', () => {
+    const html = buildPageContentHtml('moduleTest', {
+      rows: [['模块头文件（include/）', '5 个']],
+      actions: [{ cmd: 'het.newModule', icon: 'new-file', label: '新增模块' }],
+    });
+    const beforeAction = html.split('data-cmd="het.newModule"')[0];
+    assert.ok(!/codicon/.test(beforeAction));
+    assert.ok(html.includes('codicon-new-file'));
+  });
+});
