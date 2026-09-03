@@ -42,6 +42,10 @@ import { configPlatform, fieldsFor, parseBenchmarkProtocol, replaceJsoncField } 
 import { parseRemoteOrigin, parseWorkflowYaml } from './core/ciStatus';
 import { GithubAuthService, createGhAuthChecker, AuthInfo } from './core/githubAuthService';
 import { renderAuditMarkdown, AuditInput } from './core/auditReport';
+import { renderSearchQuery, renderTechDisclosure, PatentInput } from './core/patent';
+import { resolveTemplateSource, resolveCloneRef } from './core/templateService';
+import { TEMPLATE_REPO } from './core/templateDefaults';
+import { encodeMarker, parseMarker, parseCommitList, renderSyncPlan, markerPath } from './core/templateSync';
 import { FcppMetadata, FcppProject, ParsedIssue } from './types';
 
 let channel: vscode.OutputChannel | undefined;
@@ -123,6 +127,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.benchmark', () => openBenchPanel(context)),
     vscode.commands.registerCommand('het.ci', () => openCiPanel(context)),
     vscode.commands.registerCommand('het.audit', () => void runAuditReport()),
+    vscode.commands.registerCommand('het.patent', () => void runPatentWizard()),
+    vscode.commands.registerCommand('het.newProject', () => void runNewProjectWizard()),
+    vscode.commands.registerCommand('het.newProjectDirect', (opts: NewProjectOpts) => newProjectFromTemplate(opts)),
+    vscode.commands.registerCommand('het.templateUpdate', () => void runTemplateUpdateCheck()),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
@@ -137,6 +145,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const isTestHost = process.argv.some((a) => a.includes('--extensionTestsPath'));
   if (!isTestHost && currentProject && !context.workspaceState.get<boolean>('het.welcomeSeen')) {
     openWelcome(context);
+  }
+
+  // @het Chat bridge (T-4.5, optional): intent → matching HeT GUI action.
+  try {
+    const participant = vscode.chat.createChatParticipant('het.assistant', async (request) => {
+      const text = (request.prompt ?? '').toLowerCase();
+      const intent: { re: RegExp; cmd: string; label: string; note: string }[] = [
+        { re: /模块|新建|新增/, cmd: 'het.newModule', label: '新增模块向导', note: '填写模块名/简介后「生成预览 → 创建文件」' },
+        { re: /测试|用例/, cmd: 'het.generateTests', label: '测试生成', note: '模式 A 从代码生成或模式 B 蓝图先行' },
+        { re: /依赖/, cmd: 'het.openDeps', label: '依赖管理器', note: '四桶归属与 conandata/metadata 双写' },
+        { re: /文档/, cmd: 'het.docs', label: '文档中心', note: '一键 Doxygen+Sphinx（含 graphviz 本机修正）' },
+        { re: /质量|格式|静态/, cmd: 'het.quality', label: '质量与安全', note: 'format/tidy/schema/commitlint/gitleaks' },
+        { re: /审计/, cmd: 'het.audit', label: '审计报告', note: '生成 workspace/audit-report.md 供 @workspace 引用' },
+        { re: /发版|发布|release/, cmd: 'het.release', label: '发布中心', note: '开启开关 → 📦 提交 → CI 自动发版' },
+        { re: /预检|preflight|门禁/, cmd: 'het.preflight', label: '发布前检查', note: '与 CI 门禁一致' },
+        { re: /上板|bench|板卡/, cmd: 'het.benchmark', label: '上板测试', note: '无硬件可用 --no-flash + 模拟输出解析' },
+        { re: /ci|流水线|actions/, cmd: 'het.ci', label: 'CI 状态', note: '离线降级为本地工作流清单' },
+        { re: /提交/, cmd: 'het.commit', label: '提交助手', note: 'type(:emoji:) 双通道，commitlint 预检' },
+        { re: /覆盖率/, cmd: 'het.coverage', label: '覆盖率', note: '开启 activate_code_coverage 后构建并测覆盖率' },
+        { re: /驾驶舱|仪表/, cmd: 'het.dashboard', label: '驾驶舱', note: '健康分/环境/快捷动作' },
+      ];
+      const hit = intent.find((x) => x.re.test(text));
+      if (hit) {
+        void vscode.commands.executeCommand(hit.cmd);
+        return { metadata: { command: hit.cmd } };
+      }
+      return { metadata: {} };
+    });
+    context.subscriptions.push(participant);
+    log('[chat] @het participant registered');
+  } catch (err) {
+    log(`[chat] participant unavailable: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -1657,6 +1697,249 @@ async function runAuditReport(): Promise<void> {
   log(`[audit] report written: ${target}`);
   void vscode.window.showInformationMessage('审计报告已生成：workspace/audit-report.md（可在 Copilot Chat 用 @workspace 引用）。');
   void vscode.window.showTextDocument(vscode.Uri.file(target), { preview: false });
+}
+
+/** Patent mining wizard (G-20, optional): quick-input → draft under /workspace/. */
+async function runPatentWizard(): Promise<void> {
+  const root = currentProject?.root;
+  if (!root) {
+    void vscode.window.showWarningMessage('未检测到 fcpp 项目。');
+    return;
+  }
+  const ask = async (title: string, placeholder: string): Promise<string | undefined> =>
+    vscode.window.showInputBox({ title, placeHolder: placeholder, ignoreFocusOut: true });
+  const title = await ask('专利标题', '如：嵌入式算子融合调度方法');
+  if (!title) {
+    return;
+  }
+  const domain = (await ask('技术领域', '如：嵌入式神经网络算子')) ?? '';
+  const problem = (await ask('要解决的技术问题', '一句话描述')) ?? '';
+  const pointsRaw = (await ask('技术方案要点（每条用分号 ; 分隔）', '要点1; 要点2; …')) ?? '';
+  const novelty = (await ask('与现有技术的区别（创新点）', '相比现有技术的改进')) ?? '';
+  const input: PatentInput = {
+    title,
+    domain,
+    problem,
+    solutionPoints: pointsRaw.split(';').map((s) => s.trim()).filter(Boolean),
+    novelty,
+  };
+  if (input.solutionPoints.length === 0) {
+    void vscode.window.showWarningMessage('至少需要一个技术方案要点。');
+    return;
+  }
+  const slug = title.replace(/[^\w\u4e00-\u9fa5]+/g, '-').replace(/^-+|-+$/g, '') || 'invention';
+  const searchFile = join(root, 'workspace', `patent-${slug}-search.md`);
+  const draftFile = join(root, 'workspace', `patent-${slug}-disclosure.md`);
+  await writeText(searchFile, renderSearchQuery(input));
+  await writeText(draftFile, renderTechDisclosure(input));
+  log(`[patent] drafts written: ${searchFile} , ${draftFile}`);
+  void vscode.window.showInformationMessage('已生成检索式与交底书草稿（workspace/ 下，可 @workspace 引用）。');
+  void vscode.window.showTextDocument(vscode.Uri.file(draftFile), { preview: false });
+}
+
+interface NewProjectOpts {
+  name: string;
+  description?: string;
+  dest: string;
+  gitAuthor?: { name: string; email: string };
+  confirmed?: boolean;
+}
+
+/** Resolve the bootstrap template source (env override wins for dev/offline). */
+function templateSourceForInit(): ReturnType<typeof resolveTemplateSource> {
+  const localOverride = process.env.HET_TEMPLATE_LOCAL?.trim() ?? '';
+  return resolveTemplateSource(localOverride || undefined);
+}
+
+/**
+ * T-4.6 / G-21 — create a new fcpp project from the template at `opts.dest`.
+ * - Version = maintainer-pinned TEMPLATE_REF (recommended) unless a local
+ *   dev copy is supplied via TEMPLATE_LOCAL_PATH / HET_TEMPLATE_LOCAL.
+ * - Records the exact ref in `.het/template-ref.json` for T-4.7 updates.
+ * - Never asks the user for a commit hash; never mutates the template source.
+ */
+async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boolean; message: string; root?: string }> {
+  const name = opts.name.trim();
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+    return { ok: false, message: '项目名仅允许字母/数字/下划线/连字符。' };
+  }
+  const dest = opts.dest.trim();
+  if (!dest) {
+    return { ok: false, message: '请选择目标目录。' };
+  }
+  if (!opts.confirmed) {
+    return { ok: false, message: '未确认。' };
+  }
+  const git = await which('git');
+  if (!git) {
+    return { ok: false, message: '找不到 git。' };
+  }
+  const source = templateSourceForInit();
+  const decision = resolveCloneRef(source, 'recommended', { releases: [], tags: [] });
+  let tplDir = '';
+  let markerRef = '';
+  const label = decision.label;
+  if (source.mode === 'local' && source.localPath) {
+    if (!(await pathExists(join(source.localPath, 'metadata.json')))) {
+      return { ok: false, message: `本地模板目录无效：${source.localPath}（缺少 metadata.json）。` };
+    }
+    tplDir = source.localPath;
+    const rev = await run(git, ['-C', tplDir, 'rev-parse', 'HEAD']).catch(() => null);
+    markerRef = rev && rev.code === 0 ? rev.stdout.trim() : 'HEAD';
+  } else {
+    // remote path — needs network; degrade cleanly when offline
+    const osMod = await import('node:os');
+    const tmp = join(osMod.tmpdir(), `het-tpl-${Date.now()}`);
+    const clone = await run(git, ['clone', '--depth', '1', '--branch', decision.cloneRef, source.repo ?? TEMPLATE_REPO, tmp], { timeoutMs: 120000 });
+    if (!clone || clone.code !== 0) {
+      return { ok: false, message: `在线克隆失败（${decision.cloneRef}）：${clone ? `${clone.stdout}\n${clone.stderr}`.slice(-300) : '未知错误'}。离线环境请由维护者用 TEMPLATE_LOCAL_PATH/HET_TEMPLATE_LOCAL 指向本地模板副本。` };
+    }
+    tplDir = tmp;
+    markerRef = decision.cloneRef;
+  }
+  if (tplDir === dest) {
+    return { ok: false, message: '目标目录不能是模板目录本身。' };
+  }
+
+  // copy tree excluding version-control & build noise
+  const { cpSync } = await import('node:fs');
+  const { mkdirSync } = await import('node:fs');
+  mkdirSync(dest, { recursive: true });
+  const EXCLUDE = new Set(['.git', 'build', 'out', 'node_modules', '.vscode-test', '.het']);
+  try {
+    cpSync(tplDir, dest, {
+      recursive: true,
+      filter: (p) => !EXCLUDE.has(join(p).split(/[\\/]/).pop() ?? '') && !p.includes('docs/sphinx/build') && !p.includes('docs/doxygen/build'),
+    });
+  } catch (err) {
+    return { ok: false, message: `复制模板失败：${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  // record template ref for T-4.7
+  await writeText(join(dest, markerPath()), encodeMarker({ repo: source.repo ?? TEMPLATE_REPO, ref: markerRef, label }));
+
+  // rewrite identity fields (preview/confirm happens in the wizard)
+  const applied = await applyMetadataPatch(dest, { name, description: opts.description ?? name }, { persist: true });
+  if (!applied.ok) {
+    return { ok: false, message: `metadata 改写失败：${applied.issues.map((i) => i.message).join('；')}` };
+  }
+
+  // git init + baseline commit + template remote
+  const author = opts.gitAuthor ?? { name: 'HeT Developer', email: 'dev@het.invalid' };
+  await run(git, ['init', '-b', 'main'], { cwd: dest });
+  await run(git, ['config', 'user.name', author.name], { cwd: dest });
+  await run(git, ['config', 'user.email', author.email], { cwd: dest });
+  await run(git, ['add', '-A'], { cwd: dest });
+  const header = `chore(release): init from fcpp template ${label.replace(/[^\w\u4e00-\u9fa5]+/g, '-') || 'pinned'}`;
+  const c = await run(git, ['commit', '-m', header], { cwd: dest });
+  if (c.code !== 0) {
+    return { ok: false, message: `git 基线提交失败：${c.stdout}\n${c.stderr}`.slice(-400) };
+  }
+  if (source.repo) {
+    await run(git, ['remote', 'add', 'template', source.repo], { cwd: dest }).catch(() => null);
+  }
+  log(`[init] project created @ ${dest} (template ${decision.label})`);
+  return { ok: true, message: `已从模板创建项目 ${name} @ ${dest}\n（模板源：${label}，已记录到 .het/template-ref.json）`, root: dest };
+}
+
+/** User-facing init wizard (G-21): collects identity, preview, confirm, run. */
+async function runNewProjectWizard(): Promise<void> {
+  const ask = async (title: string, placeholder: string, value?: string): Promise<string | undefined> =>
+    vscode.window.showInputBox({ title, placeHolder: placeholder, value, ignoreFocusOut: true, prompt: title });
+  const name = await ask('新项目名（字母/数字/下划线/连字符）', 'my_lib');
+  if (!name) {
+    return;
+  }
+  const description = (await ask('一句话描述（将写入 metadata.description）', 'A small library based on fcpp')) ?? name;
+  const folder = await vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true, canSelectMany: false, openLabel: '选择项目存放目录' });
+  if (!folder || folder.length === 0) {
+    return;
+  }
+  const dest = join(folder[0].fsPath, name);
+  const source = templateSourceForInit();
+  const label =
+    source.mode === 'local'
+      ? `本地模板副本：${source.localPath}`
+      : `上游锁定：${source.repo}（TEMPLATE_REF）`;
+  const choice = await vscode.window.showWarningMessage(
+    `在 ${dest} 创建项目 ${name}？\n\n模板源：${label}\n\n将复制模板 → 改写 metadata.json（name/description，备份 .bak）→ git init + 基线提交（历史可追溯模板 ref）→ 记录 .het/template-ref.json。`,
+    { modal: true },
+    '创建',
+    '取消',
+  );
+  if (choice !== '创建') {
+    return;
+  }
+  const r = await newProjectFromTemplate({ name, description, dest, confirmed: true });
+  if (r.ok) {
+    void vscode.window.showInformationMessage(r.message + '\n用“文件 → 打开文件夹”打开后即可使用驾驶舱/文档/质量等功能。');
+  } else {
+    void vscode.window.showErrorMessage(r.message);
+  }
+}
+
+/** T-4.7 — template update check (read-only) for the current project. */
+async function runTemplateUpdateCheck(): Promise<void> {
+  const root = currentProject?.root;
+  const metaName = currentProject?.metadata?.name ?? 'project';
+  if (!root) {
+    void vscode.window.showWarningMessage('未检测到 fcpp 项目。');
+    return;
+  }
+  const markerFile = join(root, markerPath());
+  if (!(await pathExists(markerFile))) {
+    void vscode.window.showInformationMessage('本项目不是由模板初始化生成（缺少 .het/template-ref.json），无需更新检查。');
+    return;
+  }
+  const marker = parseMarker(await readText(markerFile));
+  if (!marker) {
+    void vscode.window.showWarningMessage('.het/template-ref.json 无法解析。');
+    return;
+  }
+  const git = await which('git');
+  if (!git) {
+    return;
+  }
+  const source = templateSourceForInit();
+  if (source.mode !== 'local' || !source.localPath) {
+    void vscode.window.showInformationMessage(
+      '在线模式模板更新检查需要 GitHub 网络（当前离线）。恢复网络后重试；开发/离线可用 HET_TEMPLATE_LOCAL 指向本地模板副本以本地对比。',
+    );
+    return;
+  }
+  if (!(await pathExists(source.localPath))) {
+    void vscode.window.showWarningMessage(`本地模板副本不存在：${source.localPath}`);
+    return;
+  }
+  const rev = await run(git, ['-C', source.localPath, 'rev-parse', 'HEAD']);
+  if (rev.code !== 0) {
+    void vscode.window.showWarningMessage('无法读取本地模板 HEAD。');
+    return;
+  }
+  const head = rev.stdout.trim();
+  if (head === marker.ref) {
+    void vscode.window.showInformationMessage(`模板无更新（HEAD=${head.slice(0, 12)}，与初始化时一致）。`);
+    return;
+  }
+  const logRes = await run(git, ['-C', source.localPath, 'log', '--oneline', `${marker.ref}..HEAD`]);
+  const commits = logRes.code === 0 ? parseCommitList(logRes.stdout) : [];
+  const plan = renderSyncPlan({
+    projectName: metaName,
+    repo: marker.repo,
+    fromRef: marker.ref.slice(0, 12),
+    toRef: head.slice(0, 12),
+    commits,
+    localOnly: true,
+  });
+  const planFile = join(root, 'workspace', 'template-sync-plan.md');
+  await writeText(planFile, plan);
+  log(`[template] update: ${marker.ref.slice(0, 12)} -> ${head.slice(0, 12)} (${commits.length} commits)`);
+  void vscode.window.showInformationMessage(
+    commits.length > 0
+      ? `模板有更新：落后 ${commits.length} 个提交。同步计划已生成 workspace/template-sync-plan.md（只读，不会自动合入）。`
+      : `模板 HEAD 已变化（${head.slice(0, 12)}）但历史不可枚举（副本标记不相交）。已生成同步计划文档供人工参考。`,
+  );
+  void vscode.window.showTextDocument(vscode.Uri.file(planFile), { preview: true });
 }
 
 /** Settings editor (G-17): preview + confirm + backup write of metadata.json. */

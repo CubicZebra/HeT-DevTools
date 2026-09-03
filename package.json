@@ -142,6 +142,22 @@
       {
         "command": "het.ci",
         "title": "HeT DevTools: CI 状态"
+      },
+      {
+        "command": "het.audit",
+        "title": "HeT DevTools: 生成审计报告"
+      },
+      {
+        "command": "het.patent",
+        "title": "HeT DevTools: 专利挖掘向导"
+      },
+      {
+        "command": "het.newProject",
+        "title": "HeT DevTools: 从模板初始化新项目"
+      },
+      {
+        "command": "het.templateUpdate",
+        "title": "HeT DevTools: 检查模板更新"
       }
     ]
   },
