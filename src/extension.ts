@@ -17,6 +17,7 @@ import { QualityRow, QualityRunResult, showQualityPanel } from './features/quali
 import { CommitRequest, CommitState, showCommitPanel } from './features/commit/panel';
 import { ReleaseState, showReleasePanel } from './features/release/panel';
 import { PreflightState, PreflightItem, showPreflightPanel } from './features/preflight/panel';
+import { BenchState, showBenchPanel } from './features/bench/panel';
 import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
 import { DashboardSnapshot } from './features/ui';
@@ -36,6 +37,7 @@ import { formatConfigForFile, parseClangFormatOutput, parseClangTidyOutput, lint
 import { pathExists, readText, writeJson, writeText } from './utils/fs';
 import { run, which } from './utils/exec';
 import { docsOptions, graphvizMismatch } from './core/docsService';
+import { configPlatform, fieldsFor, parseBenchmarkProtocol, replaceJsoncField } from './core/benchmark';
 import { FcppMetadata, FcppProject, ParsedIssue } from './types';
 
 let channel: vscode.OutputChannel | undefined;
@@ -97,6 +99,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.commitRelease', () => openCommitPanel(context, { type: 'chore', emoji: ':package:', subject: 'bump version' })),
     vscode.commands.registerCommand('het.release', () => openReleasePanel(context)),
     vscode.commands.registerCommand('het.preflight', () => openPreflightPanel(context)),
+    vscode.commands.registerCommand('het.benchmark', () => openBenchPanel(context)),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
@@ -1245,6 +1248,117 @@ function openPreflightPanel(context: vscode.ExtensionContext): void {
     },
     openRelease: async () => {
       await vscode.commands.executeCommand('het.release');
+    },
+  });
+}
+
+/** Benchmark board panel (G-14): config (comment-preserving) + no-flash build + protocol parse. */
+function openBenchPanel(context: vscode.ExtensionContext): void {
+  const configRel = 'benchmark/platform/bench_config.json';
+  const load = async (root: string): Promise<{ text: string; cfg: Record<string, unknown> } | null> => {
+    const abs = join(root, configRel);
+    if (!(await pathExists(abs))) {
+      return null;
+    }
+    const text = await readText(abs);
+    try {
+      return { text, cfg: JSON.parse(text) as Record<string, unknown> };
+    } catch {
+      return null;
+    }
+  };
+
+  const getState = async (): Promise<BenchState> => {
+    const root = currentProject?.root;
+    if (!root || !currentProject?.metadata) {
+      return { projectName: '', platform: 'unknown', fields: [], values: {}, configRel };
+    }
+    const loaded = await load(root);
+    if (!loaded) {
+      return { projectName: currentProject.metadata.name ?? '', platform: 'unknown', fields: [], values: {}, configRel };
+    }
+    const platform = configPlatform(loaded.cfg);
+    const values: Record<string, string> = {};
+    for (const f of fieldsFor(platform)) {
+      const v = loaded.cfg[f.key];
+      values[f.key] = Array.isArray(v) ? (v as string[]).join(', ') : v === undefined ? '' : String(v);
+    }
+    return { projectName: currentProject.metadata.name ?? '', platform, fields: fieldsFor(platform), values, configRel };
+  };
+
+  const saveConfig = async (values: Record<string, string>) => {
+    const root = currentProject?.root;
+    if (!root) {
+      return { ok: false, message: '未检测到 fcpp 项目。' };
+    }
+    const loaded = await load(root);
+    if (!loaded) {
+      return { ok: false, message: `无法读取 ${configRel}。` };
+    }
+    const platform = configPlatform(loaded.cfg);
+    let text = loaded.text;
+    for (const f of fieldsFor(platform)) {
+      const raw = loaded.cfg[f.key];
+      const input = (values[f.key] ?? '').trim();
+      let next: unknown;
+      if (Array.isArray(raw)) {
+        next = input ? input.split(',').map((s) => s.trim()).filter(Boolean) : [];
+      } else if (typeof raw === 'number') {
+        const n = Number(input);
+        next = Number.isNaN(n) ? raw : n;
+      } else if (typeof raw === 'boolean') {
+        next = input === 'true';
+      } else {
+        next = input;
+      }
+      const r = replaceJsoncField(text, f.key, next);
+      if (!r.ok) {
+        return { ok: false, message: r.error ?? '写入失败' };
+      }
+      text = r.text;
+    }
+    await writeText(join(root, configRel), text);
+    await refreshStatus();
+    return { ok: true, message: `已保存 ${configRel}（字段级写回，注释/结构保留）。` };
+  };
+
+  const buildNoFlash = async () => {
+    const root = currentProject?.root;
+    if (!root) {
+      return { ok: false, message: '未检测到 fcpp 项目。' };
+    }
+    const python = await which('python');
+    if (!python) {
+      return { ok: false, message: '找不到 python。' };
+    }
+    const script = 'benchmark/script/run_bench.py';
+    if (!(await pathExists(join(root, script)))) {
+      return { ok: false, message: `缺少 ${script}（fcpp 模板未含 benchmark 时跳过）。` };
+    }
+    channel?.appendLine(`[bench] ${python} ${script} --no-flash @ ${root}`);
+    const res = await run(python, [script, '--no-flash'], { cwd: root, onStdout: (c) => channel?.append(c), onStderr: (c) => channel?.append(c), timeoutMs: 0 });
+    if (res.code === 0) {
+      return { ok: true, message: '无板卡构建（--no-flash）成功。可粘贴串口输出解析结果，或接板后执行 ② 构建并上板。' };
+    }
+    return { ok: false, message: '无板卡构建失败：请查看“输出 → HeT DevTools”。（通常需先经 Conan 拉取 arm-toolchain）' };
+  };
+
+  showBenchPanel(context, {
+    getState,
+    saveConfig,
+    buildNoFlash,
+    parseSim: (text) => {
+      const p = parseBenchmarkProtocol(text);
+      if (p.cases.length === 0) {
+        return { ok: false, message: '未解析到 BENCHMARK_START…RESULT|…|n…BENCHMARK_END 协议行。', cases: [], complete: false };
+      }
+      return { ok: true, message: `解析到 ${p.cases.length} 例`, cases: p.cases, complete: p.complete };
+    },
+    openConfig: async () => {
+      const root = currentProject?.root;
+      if (root) {
+        void vscode.window.showTextDocument(vscode.Uri.file(join(root, configRel)), { preview: true });
+      }
     },
   });
 }

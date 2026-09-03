@@ -134,6 +134,10 @@
       {
         "command": "het.preflight",
         "title": "HeT DevTools: 发布前检查（Preflight）"
+      },
+      {
+        "command": "het.benchmark",
+        "title": "HeT DevTools: 上板测试（Benchmark）"
       }
     ]
   },
