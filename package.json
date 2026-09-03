@@ -102,6 +102,10 @@
       {
         "command": "het.generateTests",
         "title": "HeT DevTools: 生成测试（模式 A）"
+      },
+      {
+        "command": "het.refreshTests",
+        "title": "HeT DevTools: 刷新测试浏览器"
       }
     ]
   },

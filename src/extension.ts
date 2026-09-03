@@ -14,6 +14,7 @@ import { DiscoveredModule, showTestgenPanel } from './features/testgen/panel';
 import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
 import { DashboardSnapshot } from './features/ui';
+import { registerTestController } from './features/testExplorer/controller';
 import { showWelcomePanel } from './features/welcome/panel';
 import {
   addDependency,
@@ -56,6 +57,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   context.subscriptions.push(statusItem);
   await refreshStatus();
+
+  // Test Explorer: discover test_package/test/unit GTest cases, run via conan create.
+  registerTestController(context, { projectRoot: () => currentProject?.root, run: executeTestRun });
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => void refreshStatus()),
@@ -396,7 +400,7 @@ async function refreshStatus(): Promise<void> {
 }
 
 /** Run `conan create` in the project and stream everything to the output channel. */
-async function executeConan(project: FcppProject): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+async function runConanOnce(project: FcppProject): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   const conanExe = await locateConan();
   if (!conanExe) {
     throw new Error('找不到 conan。请先安装 Python + Conan（pip install conan; conan profile detect --force）。');
@@ -435,7 +439,7 @@ async function buildProject(): Promise<void> {
 
   let result: { ok: boolean; stdout: string; stderr: string };
   try {
-    result = await executeConan(project);
+    result = await runConanOnce(project);
   } catch (err) {
     void vscode.window.showErrorMessage(err instanceof Error ? err.message : String(err));
     return;
@@ -454,21 +458,25 @@ async function buildProject(): Promise<void> {
   }
 }
 
-/** Run `conan create` (includes the test package step) and show a parsed test view. */
-async function runTests(): Promise<void> {
+/**
+ * One full "build + run tests" cycle, shared by the het.test command and the
+ * Test Explorer controller: runs conan create, maps diagnostics, records the
+ * parsed summary and last output, and returns the raw result.
+ */
+async function executeTestRun(): Promise<{ ok: boolean; stdout: string; stderr: string } | undefined> {
   const project = currentProject;
   if (!project || !project.metadata) {
     void vscode.window.showWarningMessage('未检测到 fcpp 项目：请先打开含 metadata.json 的库文件夹。');
-    return;
+    return undefined;
   }
 
   let result: { ok: boolean; stdout: string; stderr: string };
   try {
-    result = await executeConan(project);
+    result = await runConanOnce(project);
   } catch (err) {
     lastConanOutput = err instanceof Error ? err.message : String(err);
     void vscode.window.showErrorMessage(err instanceof Error ? err.message : String(err));
-    return;
+    return undefined;
   }
 
   const fullOutput = `${result.stdout}\n${result.stderr}`;
@@ -477,22 +485,41 @@ async function runTests(): Promise<void> {
 
   lastBuildOk = result.ok;
   lastTestSummary = parseGTestOutput(fullOutput);
-  log(`[test] ok=${result.ok} gtest=${JSON.stringify({ p: lastTestSummary.passed, f: lastTestSummary.failed, s: lastTestSummary.skipped })}`);
+  log(
+    `[test] ok=${result.ok} gtest=${JSON.stringify({ p: lastTestSummary.passed, f: lastTestSummary.failed, s: lastTestSummary.skipped })}`,
+  );
+  return result;
+}
+
+/** Run `conan create` (includes the test package step) and show a parsed test view. */
+async function runTests(): Promise<void> {
+  const project = currentProject;
+  if (!project || !project.metadata) {
+    void vscode.window.showWarningMessage('未检测到 fcpp 项目：请先打开含 metadata.json 的库文件夹。');
+    return;
+  }
+
+  const result = await executeTestRun();
+  if (!result) {
+    return;
+  }
 
   if (!result.ok) {
     void vscode.window.showErrorMessage('构建/测试失败：先修复构建错误（见问题面板），再重新测试。');
     return;
   }
-  if (lastTestSummary.empty) {
+  if (lastTestSummary?.empty) {
     void vscode.window.showInformationMessage(
       '构建成功，但未捕获到 GTest 用例。请确认 metadata.json 的 trigger_tests=true 且 test_package/test/unit 下有测试。',
     );
     return;
   }
   void vscode.window.showInformationMessage(
-    `测试完成：通过 ${lastTestSummary.passed} · 失败 ${lastTestSummary.failed} · 跳过 ${lastTestSummary.skipped}`,
+    `测试完成：通过 ${lastTestSummary?.passed ?? 0} · 失败 ${lastTestSummary?.failed ?? 0} · 跳过 ${lastTestSummary?.skipped ?? 0}`,
   );
-  showTestResults(contextRef, lastTestSummary);
+  if (lastTestSummary) {
+    showTestResults(contextRef, lastTestSummary);
+  }
 }
 
 function showStoredTestResults(context: vscode.ExtensionContext): void {
