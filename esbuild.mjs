@@ -17,6 +17,7 @@ const tests = args.includes('--tests');
 const integration = args.includes('--integration');
 const c1 = args.includes('--c1');
 const c2 = args.includes('--c2');
+const c3 = args.includes('--c3');
 
 /** @type {import('esbuild').BuildOptions} */
 const common = {
@@ -95,6 +96,15 @@ function buildOptions() {
       ...common,
       entryPoints: [join(srcDir, 'test', 'integration', 'c2.ts')],
       outfile: join(outDir, 'test-integration', 'c2.js'),
+    });
+  }
+
+  // 6) C3 end-to-end check (Phase-3 journey: docs/quality/commit/release/preflight)
+  if (c3) {
+    options.push({
+      ...common,
+      entryPoints: [join(srcDir, 'test', 'integration', 'c3.ts')],
+      outfile: join(outDir, 'test-integration', 'c3.js'),
     });
   }
   return options;

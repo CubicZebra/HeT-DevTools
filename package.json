@@ -149,6 +149,7 @@
     "test:integration": "npm run compile && npm run compile:integration && node scripts/run-integration.mjs",
     "test:c1": "npm run compile && node esbuild.mjs --c1 && node scripts/run-c1.mjs",
     "test:c2": "npm run compile && node esbuild.mjs --c2 && node scripts/run-c2.mjs",
+    "test:c3": "npm run compile && node esbuild.mjs --c3 && node scripts/run-c3.mjs",
     "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
