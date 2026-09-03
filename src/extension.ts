@@ -41,6 +41,7 @@ import { docsOptions, graphvizMismatch } from './core/docsService';
 import { configPlatform, fieldsFor, parseBenchmarkProtocol, replaceJsoncField } from './core/benchmark';
 import { parseRemoteOrigin, parseWorkflowYaml } from './core/ciStatus';
 import { GithubAuthService, createGhAuthChecker, AuthInfo } from './core/githubAuthService';
+import { renderAuditMarkdown, AuditInput } from './core/auditReport';
 import { FcppMetadata, FcppProject, ParsedIssue } from './types';
 
 let channel: vscode.OutputChannel | undefined;
@@ -121,6 +122,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.preflight', () => openPreflightPanel(context)),
     vscode.commands.registerCommand('het.benchmark', () => openBenchPanel(context)),
     vscode.commands.registerCommand('het.ci', () => openCiPanel(context)),
+    vscode.commands.registerCommand('het.audit', () => void runAuditReport()),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
@@ -1484,6 +1486,177 @@ function openCiPanel(context: vscode.ExtensionContext): void {
       }
     },
   });
+}
+
+/** Full audit (G-03): collect facts, render Markdown, write to /workspace/. */
+async function runAuditReport(): Promise<void> {
+  const root = currentProject?.root;
+  if (!root || !currentProject?.metadata) {
+    void vscode.window.showWarningMessage('未检测到 fcpp 项目。');
+    return;
+  }
+  const { readdir } = await import('node:fs/promises');
+  const meta = currentProject.metadata;
+
+  // structure
+  const structure: { path: string; present: boolean }[] = [];
+  for (const p of ['include/', 'src/', 'test_package/', 'docs/', 'benchmark/', '.github/misc/', '.github/workflows/', 'CHANGELOG.md']) {
+    structure.push({ path: p, present: await pathExists(join(root, p)) });
+  }
+
+  // paired modules (include/a.hpp ↔ src/a.cpp)
+  const pairedModules: string[] = [];
+  try {
+    const inc = (await readdir(join(root, 'include'))).filter((n) => /\.(hpp|h)$/.test(n)).map((n) => n.replace(/\.(hpp|h)$/, ''));
+    const srcNames = new Set((await readdir(join(root, 'src'))).map((n) => n.replace(/\.(cpp|c)$/, '')));
+    for (const n of inc) {
+      if (srcNames.has(n)) {
+        pairedModules.push(n);
+      }
+    }
+  } catch {
+    /* missing dirs */
+  }
+
+  const metaErrors = hasErrors(validateMetadata(meta))
+    ? validateMetadata(meta).filter((i) => i.severity === 'error').map((i) => `${i.field}: ${i.message}`)
+    : [];
+
+  const tools = await detectToolchain();
+  const toolRows = Object.entries(tools).map(([name, t]) => ({ name, ok: t.state === 'ok' }));
+
+  const git = await which('git');
+  let branch = '';
+  let clean = true;
+  if (git) {
+    const br = await run(git, ['-C', root, 'branch', '--show-current']).catch(() => null);
+    branch = br && br.code === 0 ? br.stdout.trim() : '';
+    const st = await run(git, ['-C', root, 'status', '--porcelain']).catch(() => null);
+    clean = !st || st.stdout.trim().length === 0;
+  }
+
+  // docs artifacts + coverage
+  const docsArtifacts: string[] = [];
+  const walk = async (dir: string, relBase: string, depth: number): Promise<void> => {
+    if (depth > 7) {
+      return;
+    }
+    let entries: { name: string; isDir: boolean }[] = [];
+    try {
+      entries = (await readdir(dir, { withFileTypes: true })).map((d) => ({ name: d.name, isDir: d.isDirectory() }));
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (!e.isDir && e.name === 'index.html') {
+        docsArtifacts.push(`${relBase}/${e.name}`);
+      } else if (e.isDir && !e.name.startsWith('.')) {
+        await walk(join(dir, e.name), `${relBase}/${e.name}`, depth + 1);
+      }
+    }
+  };
+  await walk(join(root, 'docs', 'sphinx', 'build'), 'docs/sphinx/build', 0);
+  await walk(join(root, 'docs', 'doxygen', 'build'), 'docs/doxygen/build', 0);
+  let coverageReport: string | null = null;
+  const covProbe = [join(root, 'coverage_report', 'index.html'), join(root, 'build', 'coverage_report', 'index.html')];
+  for (const c of covProbe) {
+    if (await pathExists(c)) {
+      coverageReport = c.startsWith(root) ? c.slice(root.length).replace(/^[\\/]+/, '') : c;
+      break;
+    }
+  }
+
+  // workflows + security configs
+  const workflows: AuditInput['workflows'] = [];
+  try {
+    for (const f of (await readdir(join(root, '.github', 'workflows'))).filter((n) => /\.(yml|yaml)$/.test(n))) {
+      try {
+        workflows.push(parseWorkflowYaml(f, await readText(join(root, '.github', 'workflows', f))));
+      } catch {
+        /* skip */
+      }
+    }
+  } catch {
+    /* none */
+  }
+  const sec = {
+    gitleaks: await pathExists(join(root, '.github', 'misc', '.gitleaks.toml')),
+    megalinter: await pathExists(join(root, '.github', 'misc', '.mega-linter.yml')),
+    checkov: await pathExists(join(root, '.github', 'misc', '.checkov.yml')),
+  };
+
+  // quality quick facts
+  let formatOk: boolean | undefined;
+  let commitlintOk: boolean | undefined;
+  const fmt = await which('clang-format');
+  const srcFiles: { abs: string; fam: 'c' | 'cpp' }[] = [];
+  for (const sub of ['include', 'src']) {
+    try {
+      for (const n of await readdir(join(root, sub))) {
+        const fam = formatConfigForFile(`${sub}/${n}`);
+        if (fam) {
+          srcFiles.push({ abs: join(root, sub, n), fam });
+        }
+      }
+    } catch {
+      /* skip */
+    }
+  }
+  if (fmt && srcFiles.length > 0) {
+    let allOk = true;
+    for (const fam of ['c', 'cpp'] as const) {
+      const famAbs = srcFiles.filter((f) => f.fam === fam).map((f) => f.abs);
+      const cfg = join(root, `.github/misc/.clang-format-${fam}`);
+      if (famAbs.length === 0 || !(await pathExists(cfg))) {
+        continue;
+      }
+      const res = await run(fmt, ['--dry-run', '--Werror', `--style=file:${cfg}`, ...famAbs], { cwd: root });
+      if (res.code !== 0) {
+        allOk = false;
+      }
+    }
+    formatOk = allOk;
+  }
+  if (git) {
+    const res = await run(git, ['-C', root, 'log', '--format=%s', '-n', '10']);
+    commitlintOk = collectHeaders(res.stdout).every((h) => lintCommitHeader(h).ok);
+  }
+
+  const health = await runHealthCheck({ project: currentProject, tools, state: { lastBuildOk, lastTestsOk: lastTestSummary ? lastTestSummary.failed === 0 : undefined } });
+  const input: AuditInput = {
+    generatedAt: new Date().toISOString(),
+    projectName: meta.name ?? '',
+    version: meta.version ?? '',
+    target: meta.target ?? '',
+    health,
+    structure,
+    pairedModules: pairedModules.sort(),
+    metadataErrors: metaErrors,
+    tools: toolRows,
+    build: {
+      ok: lastBuildOk,
+      detail: lastBuildOk === undefined ? '本会话未构建' : lastBuildOk ? '最近一次构建成功' : '最近一次构建失败',
+    },
+    tests: {
+      passed: lastTestSummary?.passed,
+      failed: lastTestSummary?.failed,
+      skipped: lastTestSummary?.skipped,
+      detail: lastTestSummary ? '最近一次测试' : '本会话未运行测试',
+    },
+    docsArtifacts: docsArtifacts.slice(0, 20),
+    coverageReport,
+    workflows: workflows.sort((a, b) => a.file.localeCompare(b.file)),
+    security: sec,
+    git: { branch, clean },
+    quality: { formatOk, commitlintOk, tidyOk: undefined },
+  };
+
+  const mdText = renderAuditMarkdown(input);
+  const target = join(root, 'workspace', 'audit-report.md');
+  await writeText(target, mdText);
+  log(`[audit] report written: ${target}`);
+  void vscode.window.showInformationMessage('审计报告已生成：workspace/audit-report.md（可在 Copilot Chat 用 @workspace 引用）。');
+  void vscode.window.showTextDocument(vscode.Uri.file(target), { preview: false });
 }
 
 /** Settings editor (G-17): preview + confirm + backup write of metadata.json. */
