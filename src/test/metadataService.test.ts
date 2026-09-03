@@ -63,12 +63,20 @@ describe('metadataService.validateMetadata', () => {
     assert.ok(issues.some((i) => i.message.includes('同时出现在') && i.severity === 'error'));
   });
 
-  it('rejects pybind11 without enable_python_bindings', () => {
+  it('rejects pybind11 in a main-package bucket without enable_python_bindings', () => {
+    const issues = validateMetadata({
+      ...baseMetadata(),
+      dependencies: { common: {}, c: {}, cpp: { pybind11: ['pybind11::module'] }, infra: {} },
+    });
+    assert.ok(issues.some((i) => i.message.includes('enable_python_bindings')));
+  });
+
+  it('allows pybind11 in infra even when the switch is off (host test facility)', () => {
     const issues = validateMetadata({
       ...baseMetadata(),
       dependencies: { common: {}, c: {}, cpp: {}, infra: { pybind11: ['pybind11::module'] } },
     });
-    assert.ok(issues.some((i) => i.message.includes('enable_python_bindings')));
+    assert.ok(!issues.some((i) => i.message.includes('enable_python_bindings')), 'infra pybind11 must be accepted');
   });
 
   it('warns when all CI switches are off', () => {

@@ -135,13 +135,14 @@ export function validateMetadata(raw: unknown): ValidationIssue[] {
           }
         }
       }
-      // GTest only in infra; pybind11 gated by enable_python_bindings
+      // GTest only in infra; pybind11 in main-package buckets gated by the switch
       const gtestBucket = seen.get('gtest');
       if (gtestBucket && gtestBucket !== 'infra') {
         issues.push(fieldIssue(`dependencies.${gtestBucket}.GTest`, 'error', 'GTest 只能放在 infra 桶（主机测试设施，不进主包组件）'));
       }
-      if (seen.get('pybind11') && m.enable_python_bindings !== true) {
-        issues.push(fieldIssue('dependencies.infra.pybind11', 'error', '启用 pybind11 依赖需要 enable_python_bindings = true'));
+      const pyBucket = seen.get('pybind11');
+      if (pyBucket && pyBucket !== 'infra' && m.enable_python_bindings !== true) {
+        issues.push(fieldIssue(`dependencies.${pyBucket}.pybind11`, 'error', 'pybind11 进入主包依赖（common/c/cpp）需要 enable_python_bindings = true'));
       }
     }
   }
