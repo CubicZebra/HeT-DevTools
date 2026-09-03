@@ -138,6 +138,10 @@
       {
         "command": "het.benchmark",
         "title": "HeT DevTools: 上板测试（Benchmark）"
+      },
+      {
+        "command": "het.ci",
+        "title": "HeT DevTools: CI 状态"
       }
     ]
   },

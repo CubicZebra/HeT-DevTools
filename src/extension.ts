@@ -18,6 +18,7 @@ import { CommitRequest, CommitState, showCommitPanel } from './features/commit/p
 import { ReleaseState, showReleasePanel } from './features/release/panel';
 import { PreflightState, PreflightItem, showPreflightPanel } from './features/preflight/panel';
 import { BenchState, showBenchPanel } from './features/bench/panel';
+import { CiState, CiRunInfo, showCiPanel } from './features/ci/panel';
 import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
 import { DashboardSnapshot } from './features/ui';
@@ -38,6 +39,8 @@ import { pathExists, readText, writeJson, writeText } from './utils/fs';
 import { run, which } from './utils/exec';
 import { docsOptions, graphvizMismatch } from './core/docsService';
 import { configPlatform, fieldsFor, parseBenchmarkProtocol, replaceJsoncField } from './core/benchmark';
+import { parseRemoteOrigin, parseWorkflowYaml } from './core/ciStatus';
+import { GithubAuthService, createGhAuthChecker, AuthInfo } from './core/githubAuthService';
 import { FcppMetadata, FcppProject, ParsedIssue } from './types';
 
 let channel: vscode.OutputChannel | undefined;
@@ -56,6 +59,23 @@ const buildDiagnostics = vscode.languages.createDiagnosticCollection('het-build'
  */
 export function getActivationLine(): string {
   return activationLine;
+}
+
+/** Resolve GitHub identity via the D-9 three-tier chain (session → gh → anon). */
+async function resolveGithubAuth(): Promise<AuthInfo> {
+  const service = new GithubAuthService({
+    scopes: ['repo', 'workflow', 'read:user'],
+    getVsCodeSession: async () => {
+      try {
+        const s = await vscode.authentication.getSession('github', ['repo', 'workflow', 'read:user'], { createIfNone: false });
+        return s ? { account: { id: s.account.id, label: s.account.label }, scopes: s.scopes } : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    checkGh: createGhAuthChecker(),
+  });
+  return service.resolve();
 }
 
 /** Entry point: wires Phase 1 host features (detection, status bar, build). */
@@ -100,6 +120,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.release', () => openReleasePanel(context)),
     vscode.commands.registerCommand('het.preflight', () => openPreflightPanel(context)),
     vscode.commands.registerCommand('het.benchmark', () => openBenchPanel(context)),
+    vscode.commands.registerCommand('het.ci', () => openCiPanel(context)),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
@@ -1358,6 +1379,108 @@ function openBenchPanel(context: vscode.ExtensionContext): void {
       const root = currentProject?.root;
       if (root) {
         void vscode.window.showTextDocument(vscode.Uri.file(join(root, configRel)), { preview: true });
+      }
+    },
+  });
+}
+
+/** CI status view (G-19): GitHub Actions with D-9 tier + offline degradation. */
+function openCiPanel(context: vscode.ExtensionContext): void {
+  const getState = async (): Promise<CiState> => {
+    const root = currentProject?.root;
+    const empty: CiState = {
+      repoLabel: '',
+      tier: 'offline',
+      tierLabel: '离线',
+      hint: '未配置 git 远程（origin）或无项目。',
+      workflows: [],
+      runs: [],
+      online: false,
+      actionsUrl: '',
+    };
+    if (!root) {
+      return empty;
+    }
+    const git = await which('git');
+    let owner = '';
+    let repoName = '';
+    let actionsUrl = '';
+    if (git) {
+      const r = await run(git, ['-C', root, 'remote', 'get-url', 'origin']).catch(() => null);
+      const id = r && r.code === 0 ? parseRemoteOrigin(r.stdout) : null;
+      if (id) {
+        owner = id.owner;
+        repoName = id.repo;
+        actionsUrl = `https://github.com/${owner}/${repoName}/actions`;
+      }
+    }
+    const auth = await resolveGithubAuth();
+    const tierLabel =
+      auth.tier === 'vscode'
+        ? `已登录 · VS Code 账户：${auth.username ?? ''}`
+        : auth.tier === 'gh'
+          ? `已登录 · gh CLI：${auth.username ?? ''}`
+          : '匿名（公开仓库只读）';
+    const workflows: CiState['workflows'] = [];
+    const { readdir } = await import('node:fs/promises');
+    try {
+      const dir = join(root, '.github', 'workflows');
+      for (const f of (await readdir(dir)).filter((n) => /\.(yml|yaml)$/.test(n))) {
+        try {
+          workflows.push(parseWorkflowYaml(f, await readText(join(dir, f))));
+        } catch {
+          /* skip */
+        }
+      }
+    } catch {
+      /* no workflows */
+    }
+    let runs: CiRunInfo[] = [];
+    let online = false;
+    if (owner && repoName && git) {
+      try {
+        const res = await run(
+          'gh',
+          ['api', `repos/${owner}/${repoName}/actions/runs`, '--paginate=false', '--jq', '.workflow_runs[:10][] | {name: (.name // .display_title), branch: .head_branch, status, conclusion, created_at, html_url}'],
+          { timeoutMs: 15000 },
+        );
+        if (res.code === 0 && res.stdout.trim().length > 0) {
+          online = true;
+          runs = res.stdout
+            .split(/\r?\n/)
+            .filter((l) => l.trim().length > 0)
+            .map((l) => {
+              try {
+                const j = JSON.parse(l) as { name?: string; branch?: string; status?: string; conclusion?: string; created_at?: string; html_url?: string };
+                return { name: j.name ?? '', branch: j.branch ?? '', status: j.status ?? '', conclusion: j.conclusion ?? '', createdAt: j.created_at ?? '', url: j.html_url ?? '' };
+              } catch {
+                return null;
+              }
+            })
+            .filter((x): x is CiRunInfo => x !== null);
+        }
+      } catch {
+        online = false;
+      }
+    }
+    return {
+      repoLabel: owner && repoName ? `${owner}/${repoName}` : '(未配置 origin)',
+      tier: auth.tier,
+      tierLabel,
+      hint: auth.hint,
+      workflows: workflows.sort((a, b) => a.file.localeCompare(b.file)),
+      runs,
+      online,
+      actionsUrl,
+    };
+  };
+
+  showCiPanel(context, {
+    getState,
+    openActions: async () => {
+      const s = await getState();
+      if (s.actionsUrl) {
+        void vscode.env.openExternal(vscode.Uri.parse(s.actionsUrl));
       }
     },
   });
