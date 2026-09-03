@@ -110,6 +110,10 @@
       {
         "command": "het.coverage",
         "title": "HeT DevTools: 覆盖率视图"
+      },
+      {
+        "command": "het.docs",
+        "title": "HeT DevTools: 文档中心"
       }
     ]
   },

@@ -12,6 +12,7 @@ import { showDepsPanel, DepAddInput } from './features/deps/panel';
 import { ModulePanelInput, showModuleWizardPanel } from './features/moduleWizard/panel';
 import { DiscoveredModule, ModeBInput, ModeBPreview, showTestgenPanel } from './features/testgen/panel';
 import { CoverageState, showCoveragePanel } from './features/coverage/panel';
+import { DocsState, DocToolStatus, showDocsPanel } from './features/docs/panel';
 import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
 import { DashboardSnapshot } from './features/ui';
@@ -27,6 +28,8 @@ import { planModuleTests, scanHeader } from './core/testgen';
 import { parseBlueprint, renderContractTest, renderImplementationPlan } from './core/testgenModeB';
 import { applyMetadataPatch, loadMetadata } from './core/metadataService';
 import { pathExists, readText, writeJson, writeText } from './utils/fs';
+import { run, which } from './utils/exec';
+import { docsOptions, graphvizMismatch } from './core/docsService';
 import { FcppMetadata, FcppProject, ParsedIssue } from './types';
 
 let channel: vscode.OutputChannel | undefined;
@@ -82,6 +85,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.newModule', () => openModuleWizard(context)),
     vscode.commands.registerCommand('het.generateTests', () => openTestgenPanel(context)),
     vscode.commands.registerCommand('het.coverage', () => openCoveragePanel(context)),
+    vscode.commands.registerCommand('het.docs', () => openDocsPanel(context)),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
@@ -495,6 +499,132 @@ function openCoveragePanel(context: vscode.ExtensionContext): void {
   };
 
   showCoveragePanel(context, { getState, toggle, runCoverage });
+}
+
+/** Docs center (G-10): run docs/build.py, D-10 graphviz banner, open artifacts. */
+function openDocsPanel(context: vscode.ExtensionContext): void {
+  const locateArtifacts = async (root: string): Promise<{ rel: string; abs: string }[]> => {
+    const { readdir } = await import('node:fs/promises');
+    const hits: { rel: string; abs: string }[] = [];
+    const walk = async (dir: string, relBase: string, depth: number): Promise<void> => {
+      if (depth > 7) {
+        return;
+      }
+      let entries: { name: string; isDir: boolean }[] = [];
+      try {
+        const ds = await readdir(dir, { withFileTypes: true });
+        entries = ds.map((d) => ({ name: d.name, isDir: d.isDirectory() }));
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        const abs = join(dir, e.name);
+        const rel = `${relBase}/${e.name}`;
+        if (!e.isDir && e.name === 'index.html') {
+          hits.push({ rel, abs });
+        } else if (e.isDir && !e.name.startsWith('.') && e.name !== 'node_modules') {
+          await walk(abs, rel, depth + 1);
+        }
+      }
+    };
+    await walk(join(root, 'docs', 'sphinx', 'build'), 'docs/sphinx/build', 0);
+    await walk(join(root, 'docs', 'doxygen', 'build'), 'docs/doxygen/build', 0);
+    return hits.sort((a, b) => a.rel.localeCompare(b.rel));
+  };
+
+  const getState = async (): Promise<DocsState> => {
+    const root = currentProject?.root;
+    if (!root || !currentProject?.metadata) {
+      return { projectName: '', languages: [], versions: [], tools: [], graphvizMismatch: false, graphvizCurrent: '', graphvizExpected: '', artifacts: [] };
+    }
+    const meta = await loadMetadata(root);
+    const dotExe = await which('dot');
+    const gv = graphvizMismatch(meta, dotExe);
+    const tools: DocToolStatus[] = [
+      { name: 'Python', ok: (await which('python')) !== null },
+      { name: 'Doxygen', ok: (await which('doxygen')) !== null },
+      { name: 'Graphviz (dot)', ok: dotExe !== null },
+      { name: 'Sphinx', ok: (await which('sphinx-build')) !== null },
+      { name: 'make', ok: process.platform !== 'win32' || (await which('make')) !== null, note: process.platform === 'win32' ? 'Sphinx 段需要' : undefined },
+    ];
+    const opts = docsOptions(meta);
+    return {
+      projectName: currentProject.metadata.name ?? '',
+      languages: opts.languages,
+      versions: opts.versions,
+      tools,
+      graphvizMismatch: gv.mismatch,
+      graphvizCurrent: gv.current,
+      graphvizExpected: gv.expected,
+      artifacts: await locateArtifacts(root),
+    };
+  };
+
+  const runDocs = async () => {
+    const root = currentProject?.root;
+    if (!root) {
+      return { ok: false, message: '未检测到 fcpp 项目。' };
+    }
+    const python = await which('python');
+    if (!python) {
+      return { ok: false, message: '找不到 python（docs/build.py 需要）。请先安装 Python 3.10+。' };
+    }
+    channel?.appendLine(`[docs] ${python} docs/build.py @ ${root}`);
+    const result = await run(python, ['docs/build.py'], {
+      cwd: root,
+      onStdout: (c) => channel?.append(c),
+      onStderr: (c) => channel?.append(c),
+      timeoutMs: 0,
+    });
+    const artifacts = await locateArtifacts(root);
+    const ok = result.code === 0;
+    log(`[docs] finished ok=${ok} artifacts=${artifacts.length}`);
+    if (!ok) {
+      return { ok: false, message: '文档生成失败：请查看“输出 → HeT DevTools”中的原始日志（常见：注释标注/工具缺失）。' };
+    }
+    return { ok: true, message: `文档生成完成，找到 ${artifacts.length} 个产物页面。` };
+  };
+
+  const fixGraphviz = async () => {
+    const root = currentProject?.root;
+    if (!root) {
+      return { ok: false, message: '未检测到 fcpp 项目。' };
+    }
+    const dotExe = await which('dot');
+    const meta = await loadMetadata(root);
+    const gv = graphvizMismatch(meta, dotExe);
+    if (!gv.mismatch || !gv.expected) {
+      return { ok: false, message: '无需修正（未配置或已匹配）。' };
+    }
+    const choice = await vscode.window.showWarningMessage(
+      `把 graphviz_bin 从 ${gv.current} 改为 ${gv.expected}？\n注意：这是机器相关路径，提交前请还原或忽略该行。`,
+      { modal: true },
+      '修正',
+      '取消',
+    );
+    if (choice !== '修正') {
+      return { ok: false, message: '已取消' };
+    }
+    const applied = await applyMetadataPatch(root, { graphviz_bin: gv.expected }, { persist: true });
+    if (applied.ok) {
+      await refreshStatus();
+      return { ok: true, message: '已本机修正 graphviz_bin（已备份 .bak）。提交前请还原该字段。' };
+    }
+    return { ok: false, message: `写入失败：${applied.issues.map((i) => i.message).join('；')}` };
+  };
+
+  const openArtifact = async (rel: string) => {
+    const root = currentProject?.root;
+    if (!root) {
+      return;
+    }
+    const abs = join(root, rel);
+    if (await pathExists(abs)) {
+      void vscode.env.openExternal(vscode.Uri.file(abs));
+    }
+  };
+
+  showDocsPanel(context, { getState, runDocs, fixGraphviz, openArtifact });
 }
 
 /** Settings editor (G-17): preview + confirm + backup write of metadata.json. */
