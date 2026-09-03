@@ -22,6 +22,9 @@ process.env.HET_CONAN_PROFILES = defaultProfile + ';' + c1Profile;
 process.env.PATH = binutils + ';' + (process.env.PATH ?? '');
 process.env.VSLANG = '1033';
 rmSync(join(root, '.vscode-test'), { recursive: true, force: true });
+// Fresh test-package build: a stale CMake cache can fail to re-find the C
+// compiler when the host re-configures outside the Conan environment.
+rmSync(join(fixture, 'test_package', 'build'), { recursive: true, force: true });
 
 const candidates = [
   process.env.VSCODE_EXECUTABLE_PATH,

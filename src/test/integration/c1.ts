@@ -51,4 +51,13 @@ export async function run(): Promise<void> {
   writeFileSync(join(__dirname, '..', 'c1-evidence.txt'), evidence, 'utf8');
   console.log('[c1] PASS ' + evidence.trim());
   console.log('[c1] OK - real fcpp build + tests verified through the extension host');
+
+  // Optional "watch me" mode: keep the extension-host window open so a human
+  // can observe the dashboard / test-results panels before auto-exit.
+  const holdMs = Number(process.env.HET_C1_HOLD_MS ?? 0);
+  if (holdMs > 0) {
+    console.log(`[c1] holding ${Math.round(holdMs / 1000)}s so you can watch the window…`);
+    await new Promise((resolve) => setTimeout(resolve, holdMs));
+    console.log('[c1] auto-exit now');
+  }
 }
