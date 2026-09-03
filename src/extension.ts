@@ -8,12 +8,19 @@ import { parseCompilerOutput } from './core/outputParser';
 import { detectProjectsIn } from './core/projectDetector';
 import { detectToolchain } from './core/toolchainDetector';
 import { showDashboardPanel } from './features/dashboard/panel';
+import { showDepsPanel, DepAddInput } from './features/deps/panel';
 import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
 import { DashboardSnapshot } from './features/ui';
 import { showWelcomePanel } from './features/welcome/panel';
+import {
+  addDependency,
+  listDependencies,
+  removeDependency,
+} from './core/dependencyService';
 import { applyMetadataPatch, loadMetadata } from './core/metadataService';
-import { FcppProject, ParsedIssue } from './types';
+import { readText, writeJson, writeText } from './utils/fs';
+import { FcppMetadata, FcppProject, ParsedIssue } from './types';
 
 let channel: vscode.OutputChannel | undefined;
 let statusItem: vscode.StatusBarItem | undefined;
@@ -60,6 +67,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.test', () => runTests()),
     vscode.commands.registerCommand('het.showTestResults', () => showStoredTestResults(context)),
     vscode.commands.registerCommand('het.openSettings', () => openSettingsPanel(context)),
+    vscode.commands.registerCommand('het.openDeps', () => openDepsPanel(context)),
+    vscode.commands.registerCommand('het.addDependency', () => openDepsPanel(context)),
     vscode.commands.registerCommand('het.healthCheck', () => openDashboard(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
@@ -98,6 +107,87 @@ function openWelcome(context: vscode.ExtensionContext): void {
 
 function openDashboard(context: vscode.ExtensionContext): void {
   showDashboardPanel(context, { getSnapshot: buildSnapshot, runCommand: runHostCommand });
+}
+
+/** Dependency manager (G-07): list + add/remove with preview & dual-file write. */
+function openDepsPanel(context: vscode.ExtensionContext): void {
+  const loadPair = async (): Promise<{ metadata: FcppMetadata; conandata: string }> => {
+    const root = currentProject?.root;
+    if (!root) {
+      throw new Error('未检测到 fcpp 项目：请先打开含 metadata.json 的库文件夹。');
+    }
+    const metadata = await loadMetadata(root);
+    let conandata: string;
+    try {
+      conandata = await readText(join(root, 'conandata.yml'));
+    } catch {
+      conandata = '# requirements (managed by HeT DevTools)\nrequirements:\n';
+    }
+    return { metadata, conandata };
+  };
+
+  const persistPair = async (metadata: FcppMetadata, conandata: string): Promise<void> => {
+    const root = currentProject?.root;
+    if (!root) {
+      return;
+    }
+    await writeText(join(root, 'conandata.yml'), conandata);
+    await writeJson(join(root, 'metadata.json'), metadata, { backup: true });
+  };
+
+  showDepsPanel(context, {
+    getState: async () => {
+      const { metadata, conandata } = await loadPair();
+      return {
+        views: listDependencies(metadata, conandata),
+        issues: [],
+      };
+    },
+    add: async (input: DepAddInput) => {
+      const { metadata, conandata } = await loadPair();
+      const targets = input.targets ? input.targets.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
+      const res = addDependency(metadata, conandata, {
+        conanName: input.conanName,
+        version: input.version,
+        bucket: input.bucket,
+        targets,
+      });
+      if (!res.ok || !res.nextMetadata || !res.nextConandataText) {
+        return { ok: false, message: `添加失败：${res.issues.join('；')}` };
+      }
+      const choice = await vscode.window.showWarningMessage(
+        `添加 ${input.conanName}@${input.version} 到 ${input.bucket} 桶？将写入 conandata.yml 与 metadata.json。`,
+        { modal: true },
+        '应用',
+        '取消',
+      );
+      if (choice !== '应用') {
+        return { ok: false, message: '已取消' };
+      }
+      await persistPair(res.nextMetadata, res.nextConandataText);
+      await refreshStatus();
+      return { ok: true, message: `已添加 ${input.conanName}@${input.version} → ${input.bucket}` };
+    },
+    remove: async (bucket, displayKey) => {
+      const { metadata, conandata } = await loadPair();
+      const res = removeDependency(metadata, conandata, { bucket: bucket as never, displayKey });
+      if (!res.ok || !res.nextMetadata || !res.nextConandataText) {
+        return { ok: false, message: `移除失败：${res.issues.join('；')}` };
+      }
+      const choice = await vscode.window.showWarningMessage(`移除依赖 ${displayKey}？将同时清理 conandata.yml 与 metadata.json。`, {
+        modal: true,
+      }, '应用', '取消');
+      if (choice !== '应用') {
+        return { ok: false, message: '已取消' };
+      }
+      await persistPair(res.nextMetadata, res.nextConandataText);
+      await refreshStatus();
+      return { ok: true, message: `已移除 ${displayKey}` };
+    },
+    refresh: async () => {
+      await refreshStatus();
+    },
+  });
 }
 
 /** Settings editor (G-17): preview + confirm + backup write of metadata.json. */

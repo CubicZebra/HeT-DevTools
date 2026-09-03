@@ -86,6 +86,14 @@
       {
         "command": "het.openSettings",
         "title": "HeT DevTools: 项目设置（metadata.json）"
+      },
+      {
+        "command": "het.openDeps",
+        "title": "HeT DevTools: 依赖管理器"
+      },
+      {
+        "command": "het.addDependency",
+        "title": "HeT DevTools: 添加依赖"
       }
     ]
   },
