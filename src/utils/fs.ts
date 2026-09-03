@@ -23,6 +23,16 @@ export async function exists(file: string): Promise<boolean> {
   }
 }
 
+/** True when the path exists (file or directory). */
+export async function pathExists(p: string): Promise<boolean> {
+  try {
+    await stat(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function readText(file: string): Promise<string> {
   try {
     return await readFile(file, 'utf8');

@@ -38,5 +38,11 @@ export async function run(): Promise<void> {
 
   const folders = vscode.workspace.workspaceFolders ?? [];
   assert.ok(folders.length > 0, 'expected a workspace folder (mini-fcpp fixture)');
+
+  // Phase 1: host-side project detection must be wired (T-1.1).
+  await vscode.commands.executeCommand('het.refresh');
+  const detectedName = await vscode.commands.executeCommand<string | null>('het.getCurrentProject');
+  assert.strictEqual(detectedName, 'mini-fcpp', 'host should detect the mini-fcpp project');
+
   console.log('[integration-smoke] OK - extension active in ' + folders[0].uri.fsPath);
 }

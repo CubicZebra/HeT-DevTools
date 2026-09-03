@@ -1,0 +1,3 @@
+# L3 fixture: only a conandata.yml trace marker (no metadata.json).
+requirements:
+  - "gtest/1.16.0"

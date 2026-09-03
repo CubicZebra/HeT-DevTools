@@ -43,6 +43,14 @@
       {
         "command": "het.hello",
         "title": "HeT DevTools: Hello (smoke test)"
+      },
+      {
+        "command": "het.refresh",
+        "title": "HeT DevTools: 重新检测项目"
+      },
+      {
+        "command": "het.build",
+        "title": "HeT DevTools: 构建项目"
       }
     ]
   },

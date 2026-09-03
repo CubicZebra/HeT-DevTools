@@ -79,3 +79,18 @@ export interface ToolStatus {
   /** Version constraint for display (human readable). */
   required?: string;
 }
+
+/** A compiler error/warning parsed from build output. */
+export interface ParsedIssue {
+  severity: 'error' | 'warning';
+  /** File path as printed by the compiler. */
+  file: string;
+  /** 1-based line. */
+  line: number;
+  /** 1-based column when the compiler prints it. */
+  column?: number;
+  /** The compiler message (without the file:line prefix). */
+  message: string;
+  /** Compiler family that produced the line. */
+  origin: 'msvc' | 'gcc-clang' | 'unknown';
+}
