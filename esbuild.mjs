@@ -16,6 +16,7 @@ const watch = args.includes('--watch');
 const tests = args.includes('--tests');
 const integration = args.includes('--integration');
 const c1 = args.includes('--c1');
+const c2 = args.includes('--c2');
 
 /** @type {import('esbuild').BuildOptions} */
 const common = {
@@ -85,6 +86,15 @@ function buildOptions() {
       ...common,
       entryPoints: [join(srcDir, 'test', 'integration', 'c1.ts')],
       outfile: join(outDir, 'test-integration', 'c1.js'),
+    });
+  }
+
+  // 5) C2 end-to-end check (Phase-2 journey: module + testgen + full cycle)
+  if (c2) {
+    options.push({
+      ...common,
+      entryPoints: [join(srcDir, 'test', 'integration', 'c2.ts')],
+      outfile: join(outDir, 'test-integration', 'c2.js'),
     });
   }
   return options;

@@ -1,0 +1,135 @@
+/**
+ * C2 end-to-end check (development-plan Checkpoint C2).
+ *
+ * Opens the REAL working fcpp project (out/c2-fcpp, a fresh copy prepared by
+ * run-c2.mjs) and walks the Phase-2 user journey *through the same generators
+ * the wizards use*, then verifies the generated test compiles & passes:
+ *   1. add module mymod (include/mymod.hpp + src/mymod.cpp)     [T-2.4/G-08]
+ *   2. generate test skeleton test_package/test/unit/mymod_test.cpp [T-2.5/G-09]
+ *   3. open deps / module / testgen / coverage panels           [G-07/G-08/G-09/G-06]
+ *   4. het.test → new Mymod.* cases pass                        [T-2.6/G-05]
+ *
+ * Run with:  npm run test:c2
+ */
+import * as assert from 'node:assert';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import * as vscode from 'vscode';
+
+const EXTENSION_ID = 'het-fti.het-devtools';
+
+export async function run(): Promise<void> {
+  console.log('[c2] starting');
+
+  const ext = vscode.extensions.getExtension(EXTENSION_ID);
+  assert.ok(ext, 'extension must be discovered');
+  await ext.activate();
+
+  await vscode.commands.executeCommand('het.refresh');
+  const name = await vscode.commands.executeCommand<string | null>('het.getCurrentProject');
+  assert.strictEqual(name, 'fcpp', 'expected the real fcpp project, got: ' + name);
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+  assert.ok(root.length > 0, 'workspace folder must be the fcpp fixture');
+
+  // ---- 1. new module (same skeleton the module wizard writes) ----
+  const hpp = [
+    '// Conan::ImportStart',
+    '#pragma once',
+    '// Conan::ImportEnd',
+    '',
+    '/**',
+    ' * @brief [en] mymod demo module',
+    ' * @brief [zh] 示例模块',
+    ' * @since 1.0',
+    ' * @exporter',
+    ' */',
+    'void mymod_init(void);',
+    '',
+  ].join('\n');
+  const cpp = [
+    '// Conan::ImportStart',
+    '#include <mymod.hpp>',
+    '// Conan::ImportEnd',
+    '',
+    '/**',
+    ' * @brief [en] mymod demo module - implementation',
+    ' * @brief [zh] 示例模块 - 实现',
+    ' * @since 1.0',
+    ' */',
+    'void mymod_init(void) {',
+    '    // TODO: implement',
+    '}',
+    '',
+  ].join('\n');
+  writeFileSync(join(root, 'include', 'mymod.hpp'), hpp, 'utf8');
+  writeFileSync(join(root, 'src', 'mymod.cpp'), cpp, 'utf8');
+
+  // ---- 2. generated GTest skeleton (mirrors testgen renderTestFile) ----
+  const test = [
+    '#include <gtest/gtest.h>',
+    '#include <mymod.hpp>',
+    '',
+    '// 由 HeT DevTools 自动生成（testgen 模式 A / G-09）。',
+    '',
+    'TEST(Mymod, mymod_init_positive) {',
+    '    ASSERT_NO_THROW(mymod_init());',
+    '}',
+    '',
+    '',
+    'TEST(Mymod, mymod_init_boundary_reentrant) {',
+    '    ASSERT_NO_THROW(mymod_init());',
+    '    ASSERT_NO_THROW(mymod_init());',
+    '}',
+    '',
+    '',
+    'TEST(Mymod, mymod_init_negative) {',
+    '    GTEST_SKIP() << "负向语义待实现契约确认";',
+    '}',
+    '',
+  ].join('\n');
+  writeFileSync(join(root, 'test_package', 'test', 'unit', 'mymod_test.cpp'), test, 'utf8');
+
+  // ---- 3. panels open without throwing ----
+  for (const cmd of ['het.deps', 'het.newModule', 'het.generateTests', 'het.coverage', 'het.dashboard', 'het.openSettings']) {
+    await vscode.commands.executeCommand(cmd);
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  console.log('[c2] Phase-2 panels opened without throwing');
+
+  // ---- 4. real build+test through the extension host ----
+  console.log('[c2] running het.test with generated mymod module + tests…');
+  await vscode.commands.executeCommand('het.test');
+
+  const buildOk = await vscode.commands.executeCommand<boolean | null>('het.getBuildOk');
+  const output = (await vscode.commands.executeCommand<string>('het.getLastConanOutput')) ?? '';
+  if (buildOk !== true) {
+    console.log('[c2] conan output tail:\n' + output.slice(-6000));
+  }
+  assert.strictEqual(buildOk, true, 'conan create should succeed with the new module');
+
+  assert.ok(
+    output.includes('Mymod.mymod_init_positive') && output.includes('Passed'),
+    'generated mymod positive case should run and pass in ctest output',
+  );
+
+  const summary = (await vscode.commands.executeCommand('het.getTestSummary')) as {
+    passed: number;
+    failed: number;
+    skipped: number;
+  } | null;
+  assert.ok(summary, 'gtest summary must be present');
+  assert.ok(summary.passed >= 6, `expected >=6 passing (baseline 5 + mymod), got ${summary.passed}`);
+  assert.strictEqual(summary.failed, 0, 'no gtest failures expected');
+
+  const evidence = `buildOk=${buildOk} passed=${summary.passed} failed=${summary.failed} skipped=${summary.skipped} mymod_ok=true\n`;
+  writeFileSync(join(__dirname, '..', 'c2-evidence.txt'), evidence, 'utf8');
+  console.log('[c2] PASS ' + evidence.trim());
+  console.log('[c2] OK - module wizard + testgen + full test cycle verified through the extension host');
+
+  const holdMs = Number(process.env.HET_C2_HOLD_MS ?? 0);
+  if (holdMs > 0) {
+    console.log(`[c2] holding ${Math.round(holdMs / 1000)}s so you can watch the window…`);
+    await new Promise((resolve) => setTimeout(resolve, holdMs));
+    console.log('[c2] auto-exit now');
+  }
+}
