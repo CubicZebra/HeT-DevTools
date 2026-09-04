@@ -1,13 +1,13 @@
 /**
- * C6 cockpit/dashboard check (gui-rework-plan-v2 Checkpoint C6).
+ * C6 cockpit/dashboard check (gui-rework-plan-v3 Checkpoint C6).
  *
  * Two phases, fully offline:
- *   Phase "empty" — an empty workspace folder → the status-bar chip becomes a
- *                   "＋ 新建 fcpp 项目" hint wired to the new-project wizard.
- *   Phase "proj"  — the mini-fcpp fixture → chip shows the project and opens
- *                   the dashboard; `het.dashboard?["deps"]` focuses the deps
- *                   section of the single-column document; the V2-3 search
- *                   command is registered.
+ *   Phase "empty" — an empty workspace folder → the monitoring chip is HIDDEN
+ *                   (V3-1: no project ⇒ invisible) and the Explorer init-here
+ *                   command `het.newProjectHere` is registered.
+ *   Phase "proj"  — the mini-fcpp fixture → chip (het.chipOverview, icon
+ *                   tooltip, no new-project link); `het.dashboard?["deps"]`
+ *                   focuses the deps section; deps commands are registered.
  *
  * Run with:  npm run test:c6
  */
@@ -31,17 +31,21 @@ export async function run(): Promise<void> {
   await new Promise((r) => setTimeout(r, 400));
 
   const chip = (await vscode.commands.executeCommand('het.getChipState')) as ChipShape | null;
-  assert.ok(chip, 'status-bar chip state must be queryable');
 
   if (phase === 'empty') {
-    assert.ok(chip.text.includes('新建 fcpp'), 'empty workspace chip should invite project creation: ' + chip.text);
-    assert.strictEqual(chip.command, 'het.newProject');
-    assert.ok(chip.tooltip.includes('het.newProject'), 'tooltip must carry the new-project command link');
-    console.log('[c6] empty-phase OK — chip invites project creation');
+    // V3-1: without a project the monitoring chip must be invisible — and the
+    // empty-workspace on-boarding prompt must never have blocked activation.
+    assert.strictEqual(chip, null, 'monitoring chip must be hidden when no fcpp project is open');
+    const cmds = await vscode.commands.getCommands(true);
+    assert.ok(cmds.includes('het.newProjectHere'), 'Explorer init-here command must be registered');
+    assert.ok(cmds.includes('het.chipOverview'), 'chip overview command must be registered');
+    console.log('[c6] empty-phase OK — chip hidden (monitoring only) + init-here registered');
   } else {
+    assert.ok(chip, 'project chip should be present');
     assert.ok(chip.text.includes('HeT'), 'project chip should be present');
-    assert.strictEqual(chip.command, 'het.dashboard');
-    assert.ok(chip.tooltip.includes('het.dashboard'), 'tooltip must link the dashboard');
+    assert.strictEqual(chip.command, 'het.chipOverview', 'project chip opens the monitor overview');
+    assert.ok(chip.tooltip.includes('$('), 'tooltip must carry $(icon) tokens');
+    assert.ok(!chip.tooltip.includes('het.newProject'), 'monitoring chip must not offer new project');
 
     // open dashboard at the deps section (anchor semantics)
     await vscode.commands.executeCommand('het.dashboard', ['deps']);
@@ -51,11 +55,11 @@ export async function run(): Promise<void> {
     assert.strictEqual(state.top.projectName, 'mini-fcpp');
     assert.strictEqual(state.page, 'deps', 'dashboard should focus the deps section');
 
-    // V2-3 search command is registered
+    // deps commands are registered
     const cmds = await vscode.commands.getCommands(true);
     assert.ok(cmds.includes('het.refreshConanIndex'), 'het.refreshConanIndex must be registered');
     assert.ok(cmds.includes('het.addDependency'), 'het.addDependency must be registered');
-    console.log('[c6] project-phase OK — chip + dashboard deps focus + deps commands registered');
+    console.log('[c6] project-phase OK — chip overview + dashboard deps focus + deps commands registered');
   }
   console.log('[c6] OK');
 }

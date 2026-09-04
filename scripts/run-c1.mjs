@@ -21,6 +21,7 @@ const defaultProfile = join(
 process.env.HET_CONAN_PROFILES = defaultProfile + ';' + c1Profile;
 process.env.PATH = binutils + ';' + (process.env.PATH ?? '');
 process.env.VSLANG = '1033';
+process.env.HET_NO_UI = '1'; // automation: never show on-boarding/notifications
 rmSync(join(root, '.vscode-test'), { recursive: true, force: true });
 // Fresh test-package build: a stale CMake cache can fail to re-find the C
 // compiler when the host re-configures outside the Conan environment.

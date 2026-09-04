@@ -34,6 +34,7 @@ try {
 }
 
 process.env.VSLANG = '1033';
+process.env.HET_NO_UI = '1'; // automation: never show on-boarding/notifications
 rmSync(join(root, '.vscode-test'), { recursive: true, force: true });
 
 const candidates = [

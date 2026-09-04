@@ -28,5 +28,7 @@
   "cmd.patent": "HeT DevTools: Patent wizard",
   "cmd.newProject": "HeT DevTools: New project from template",
   "cmd.templateUpdate": "HeT DevTools: Check template updates",
-  "cmd.cockpit": "HeT DevTools: Dashboard"
+  "cmd.cockpit": "HeT DevTools: Dashboard",
+  "cmd.chipOverview": "HeT DevTools: Open overview",
+  "cmd.newProjectHere": "HeT DevTools: Initialize fcpp project here"
 }

@@ -17,6 +17,7 @@ function fakeConda(): string {
     mkdirSync(d, { recursive: true });
   }
   writeFileSync(join(fakeRoot, 'envs', 'build', 'Scripts', 'doxygen.exe'), '');
+  writeFileSync(join(fakeRoot, 'envs', 'build', 'python.exe'), '');
   writeFileSync(join(fakeRoot, 'envs', 'base', 'Library', 'bin', 'dot.exe'), '');
   writeFileSync(join(fakeRoot, 'envs', 'zzz', 'Scripts', 'gitleaks.exe'), '');
   return fakeRoot;
@@ -58,6 +59,23 @@ describe('toolchainDiscovery (generic environment sniffing)', () => {
     const row = rows.find((r) => r.key === 'gcovr');
     assert.ok(row);
     assert.ok(row.source === 'missing' || row.source === 'conda' || row.source === 'mamba' || row.source === 'uv' || row.source === 'venv', JSON.stringify(row));
+  });
+
+  it('finds python at the env ROOT (conda keeps python.exe at the root, not Scripts)', async () => {
+    const root = fakeConda();
+    const rows = await discoverTools({ extraRoots: [root], wsl: false, skipPath: true, preferEnvNames: ['build'] });
+    const py = rows.find((r) => r.key === 'python');
+    assert.ok(py && py.source === 'conda' && py.sourceDetail.includes('env build'), JSON.stringify(py));
+  });
+
+  it('tags gtest as conan-managed and lcov as optional-Linux when missing', async () => {
+    const rows = await discoverTools({ wsl: false, skipPath: true, extraBinDirs: [] });
+    const gtest = rows.find((r) => r.key === 'gtest');
+    const lcov = rows.find((r) => r.key === 'lcov');
+    if (gtest && gtest.source === 'missing') {
+      assert.strictEqual(gtest.managed, true, 'gtest must be flagged conan-managed');
+    }
+    assert.strictEqual(lcov?.optional, true);
   });
 
   it('env root candidates include mamba roots and ProgramData', () => {

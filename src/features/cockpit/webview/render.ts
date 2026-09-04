@@ -46,7 +46,7 @@ export interface OverviewPayload {
   lastBuildOk: boolean | null;
   lastTest: TestSummaryPayload | null;
   /** Sniffed conan runtime (conda env / PATH / null). */
-  runtime?: { version?: string; envName?: string } | null;
+  runtime?: { version?: string; envName?: string; custom?: boolean } | null;
   /** Generic toolchain discovery rows (V2 env block). */
   envRows?: ToolRow[];
 }
@@ -120,16 +120,21 @@ function envBlockHtml(rows: ToolRow[]): string {
   }
   const items = rows
     .map((r) => {
-      const mark = r.source === 'missing' ? '✗' : r.informational ? '~' : '✓';
+      const managedMissing = r.managed && r.source === 'missing';
+      const optionalMissing = r.optional && r.source === 'missing';
+      const mark = managedMissing || optionalMissing || r.informational ? '~' : r.source === 'missing' ? '✗' : '✓';
       const exeBase = r.exe ? r.exe.split(/[\\/]/).pop() : '';
-      const src =
-        r.source === 'missing'
-          ? '未找到（安装后点重新嗅探，或手动指定）'
-          : r.source === 'override'
-            ? r.exe
-            : r.informational
-              ? `${r.sourceDetail}`
-              : `${r.sourceDetail} · ${exeBase}`;
+      const src = managedMissing
+        ? '由 conan 托管（构建时自动获取，无需主机安装）'
+        : optionalMissing
+          ? '可选 · 仅 Linux/WSL 覆盖率需要'
+          : r.source === 'missing'
+            ? '未找到（安装后点重新嗅探，或手动指定）'
+            : r.source === 'override'
+              ? r.exe
+              : r.informational
+                ? `${r.sourceDetail}`
+                : `${r.sourceDetail} · ${exeBase}`;
       const btn = `<button class="textbtn" data-page-action="env:set" data-arg-tool="${esc(r.key)}">手动指定</button>`;
       const clear = r.overridden ? `<button class="textbtn" data-page-action="env:clear" data-arg-tool="${esc(r.key)}">清除</button>` : '';
       return `<div class="drow"><span class="dk">${mark} ${esc(r.label)}</span><span class="dv dim">${esc(src)}</span><span class="dv">${btn}${clear}</span></div>`;
@@ -138,16 +143,21 @@ function envBlockHtml(rows: ToolRow[]): string {
   return `<details class="mini" open>
     <summary class="mini-head">环境与工具链（自动嗅探 · 可手动指定）</summary>
     ${items}
-    <div class="status">来源：PATH / conda / mamba / uv / venv / WSL（~ 信息性）· 手动指定写入 het.tools.*，构建·文档·质量自动生效。</div>
+    <div class="status">来源：PATH / conda / mamba / uv / venv / WSL（~ 信息性）· gtest/benchmark 由 conan 托管 · 手动指定写入 het.tools.*，构建·文档·质量自动生效。</div>
   </details>`;
 }
 
 function overviewContent(p: OverviewPayload): string {
   const health = p.healthScore === undefined ? '' : `<span class="chip ${p.healthScore >= 80 ? 'ok' : p.healthScore >= 50 ? 'warn' : 'fail'}">健康分 ${p.healthScore}</span>`;
   const tools = p.tools.map((t) => `<span class="status">${t.ok ? '✓' : '✗'} ${esc(t.name)}</span>`).join(' ');
+  const rtSrc = p.runtime?.custom
+    ? '用户自定义'
+    : p.runtime?.envName
+      ? `conda env ${esc(p.runtime.envName)}（启发式推断 · 极可能）`
+      : 'PATH';
   const runtime = p.runtime
-    ? `<div class="status">构建运行时：conan ${esc(p.runtime.version ?? '')} · ${esc(p.runtime.envName ? `conda env ${p.runtime.envName}` : 'PATH')} · 自动嗅探</div>`
-    : '<div class="status">构建运行时：未找到 conan（已嗅探 conda 常见根目录）</div>';
+    ? `<div class="status">构建运行时：conan ${esc(p.runtime.version ?? '')} · ${rtSrc} · 自动嗅探</div>`
+    : '<div class="status">构建运行时：未找到 conan（已嗅探常见环境；可手动指定）</div>';
   return `<div class="row">${health}</div>
     <div class="grid">
       <div class="card"><div class="ct">最近构建</div><div class="cv">${statusMark(p.lastBuildOk)} ${p.lastBuildOk === null ? '未运行' : p.lastBuildOk ? '成功' : '失败'}</div></div>

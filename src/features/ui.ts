@@ -8,15 +8,6 @@ export interface DashboardSnapshot {
   health?: HealthReport;
 }
 
-/** Build a snapshot from the current host state (called by extension.ts). */
-export async function buildSnapshot(deps: {
-  project?: FcppProject;
-  tools: Record<string, ToolStatus>;
-  health?: HealthReport;
-}): Promise<DashboardSnapshot> {
-  return { project: deps.project, tools: deps.tools, health: deps.health };
-}
-
 /** HTML-escape arbitrary values for safe interpolation into webviews. */
 export function esc(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => {

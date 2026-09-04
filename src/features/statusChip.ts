@@ -1,14 +1,10 @@
 /**
- * HeT status-bar chip (GUI rework v2 — V2-1).
+ * HeT status-bar chip (GUI rework v3 — V3-1/V3-3).
  *
- * The ONLY always-visible surface of the extension. Invisible by default:
- *  - no fcpp project + non-empty workspace  → chip hidden (VS Code unchanged)
- *  - fcpp project open                       → one small chip with health pulse
- *  - empty workspace folder                  → "＋ 新建 fcpp 项目" hint (one-time
- *                                             notification handled by the host)
- *
- * The tooltip is a markdown bullet overview with command links so a hover is
- * enough to read the whole project health and jump to actions.
+ * PURE monitoring surface — it never offers "new project". The chip appears
+ * ONLY when an fcpp project is detected (invisible otherwise), sits bottom-
+ * right (host places it beside the notification bell), shows a theme-icon
+ * tooltip on hover, and opens a QuickPick overview on click.
  * PURE module — no VS Code imports (unit-testable).
  */
 
@@ -21,8 +17,6 @@ export interface ChipTest {
 export interface ChipModel {
   /** '' when no fcpp project is open. */
   projectName: string;
-  /** True only when an actual empty workspace folder is open. */
-  workspaceEmpty: boolean;
   health: number | null;
   running: string | null;
   lastBuildOk: boolean | null;
@@ -34,70 +28,45 @@ export interface ChipModel {
 
 export interface ChipSpec {
   text: string;
+  /** Markdown with `$(codicon)` theme icons (host wraps in MarkdownString). */
   tooltip: string;
+  /** Command run on click (monitor overview QuickPick). */
   command?: string;
   /** VS Code ThemeColor id, e.g. statusBarItem.errorBackground. */
   color?: string;
 }
 
-/** command:foo?["a",1] — args array must be URI-encoded JSON. */
-function link(label: string, command: string, args?: unknown[]): string {
-  const suffix = args && args.length ? `?${encodeURIComponent(JSON.stringify(args))}` : '';
-  return `[${label}](command:${command}${suffix})`;
-}
-
+/** Render the chip only while a project is open — monitoring only. */
 export function chipSpec(m: ChipModel): ChipSpec | null {
-  if (m.projectName) {
-    const run = m.running ? '$(sync~spin)' : '$(pulse)';
-    const score = m.health === null ? '·' : String(m.health);
-    const text = `${run} HeT ${score}`;
-    const testLine = m.test
-      ? `- 测试 ${m.test.passed}/${m.test.passed + m.test.failed + m.test.skipped} 通过 · 失败 ${m.test.failed} · 跳过 ${m.test.skipped} · ${link('查看结果', 'het.showTestResults')}`
-      : '- 测试 未运行';
-    const buildLine = `- 最近构建 ${
-      m.lastBuildOk === null
-        ? '未运行'
-        : m.lastBuildOk
-          ? '✓ 成功'
-          : `✗ 失败 · ${link('查看问题', 'workbench.actions.view.problems')}`
-    } · ${link('重跑', 'het.build')}`;
-    const templateLine =
-      m.templateBehind > 0
-        ? `- ⚠ 模板可更新 ${m.templateBehind} 个提交 · ${link('查看同步计划', 'het.templateUpdate')}`
-        : '- 模板与参考一致';
-    const healthLine = `- 健康分 ${m.health === null ? '未体检' : `${m.health}/100`} · ${link('一键体检', 'het.healthCheck')}`;
-    const runningLine = m.running ? `- 运行中：${m.running}` : '';
-    const conanLine = m.conanEnv ? `- conan ✓ ${m.conanEnv}` : '- ⚠ 未找到 conan（构建暂不可用）';
-    const actionLine = `${link('打开仪表盘', 'het.dashboard')} · ${link('构建并测试', 'het.test')} · ${link('新建项目', 'het.newProject')}`;
-    const lines = [
-      `**HeT DevTools — ${m.projectName}**`,
-      healthLine,
-      buildLine,
-      testLine,
-      templateLine,
-      conanLine,
-      runningLine,
-      `---`,
-      actionLine,
-    ].filter((l) => l.length > 0);
-    return {
-      text,
-      tooltip: lines.join('\n\n'),
-      command: 'het.dashboard',
-      color: m.lastBuildOk === false ? 'statusBarItem.errorBackground' : undefined,
-    };
+  if (!m.projectName) {
+    return null;
   }
-
-  if (m.workspaceEmpty) {
-    return {
-      text: '$(rocket) HeT ＋ 新建 fcpp 项目',
-      tooltip:
-        '**HeT DevTools**\n\n当前文件夹为空。可基于 fcpp 模板初始化一个标准 C/C++ 库工程（构建 / 测试 / 文档 / 发布流水线开箱即用）：\n\n' +
-        link('新建项目（向导）', 'het.newProject'),
-      command: 'het.newProject',
-    };
-  }
-
-  // Non-fcpp, non-empty workspace → completely invisible.
-  return null;
+  const run = m.running ? '$(sync~spin)' : '$(pulse)';
+  const score = m.health === null ? '·' : String(m.health);
+  const text = `${run} HeT ${score}`;
+  const healthIcon = m.health === null ? '$(question)' : m.health >= 80 ? '$(smiley)' : m.health >= 50 ? '$(warning)' : '$(error)';
+  const buildIcon = m.lastBuildOk === null ? '$(circle-outline)' : m.lastBuildOk ? '$(pass)' : '$(error)';
+  const testIcon = m.test ? (m.test.failed > 0 ? '$(error)' : '$(pass)') : '$(circle-outline)';
+  const tplIcon = m.templateBehind > 0 ? '$(sync~spin)' : '$(check)';
+  const conanIcon = m.conanEnv ? '$(check)' : '$(error)';
+  const runningLine = m.running ? `\n- $(sync~spin) 运行中：${m.running}` : '';
+  const lines = [
+    `**$(package) HeT DevTools — ${m.projectName}**`,
+    `- ${healthIcon} 健康分 ${m.health === null ? '未体检' : `${m.health}/100`}`,
+    `- ${buildIcon} 最近构建 ${m.lastBuildOk === null ? '未运行' : m.lastBuildOk ? '成功' : '失败'}`,
+    m.test
+      ? `- ${testIcon} 测试 ${m.test.passed}/${m.test.passed + m.test.failed + m.test.skipped} 通过 · 失败 ${m.test.failed} · 跳过 ${m.test.skipped}`
+      : '- $(circle-outline) 测试 未运行',
+    `- ${tplIcon} ${m.templateBehind > 0 ? `模板可更新 ${m.templateBehind} 个提交` : '模板与参考一致'}`,
+    `- ${conanIcon} conan ${m.conanEnv ?? '未找到（构建暂不可用）'}`,
+    runningLine,
+    '',
+    '点击 chip 打开监控概况（键盘可直达各分区）',
+  ].filter((l) => l.length > 0);
+  return {
+    text,
+    tooltip: lines.join('\n'),
+    command: 'het.chipOverview',
+    color: m.lastBuildOk === false ? 'statusBarItem.errorBackground' : undefined,
+  };
 }

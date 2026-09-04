@@ -28,6 +28,10 @@ export interface ToolRow {
   overridden: boolean;
   /** For WSL rows: purely informational (not usable by the Windows build). */
   informational?: boolean;
+  /** Managed by conan (gtest/benchmark): no host install needed. */
+  managed?: boolean;
+  /** Optional Linux/WSL-only tool: absence on Windows is not an error. */
+  optional?: boolean;
 }
 
 export interface DiscoveryOptions {
@@ -47,7 +51,15 @@ export interface DiscoveryOptions {
   extraRoots?: string[];
 }
 
-export const TOOL_DEFS: { key: string; label: string; exeNames: string[] }[] = [
+interface ToolDef {
+  key: string;
+  label: string;
+  exeNames: string[];
+  managed?: boolean;
+  optional?: boolean;
+}
+
+export const TOOL_DEFS: ToolDef[] = [
   { key: 'conan', label: 'Conan', exeNames: ['conan'] },
   { key: 'python', label: 'Python', exeNames: ['python', 'python3'] },
   { key: 'cmake', label: 'CMake', exeNames: ['cmake'] },
@@ -59,10 +71,12 @@ export const TOOL_DEFS: { key: string; label: string; exeNames: string[] }[] = [
   { key: 'clang-format', label: 'clang-format', exeNames: ['clang-format'] },
   { key: 'clang-tidy', label: 'clang-tidy', exeNames: ['clang-tidy'] },
   { key: 'gitleaks', label: 'Gitleaks', exeNames: ['gitleaks'] },
+  { key: 'gtest', label: 'GTest', exeNames: ['gtest'], managed: true },
+  { key: 'benchmark', label: 'Google Benchmark', exeNames: ['benchmark'], managed: true },
   { key: 'gcc', label: 'GCC (gcc)', exeNames: ['gcc'] },
   { key: 'g++', label: 'G++ (g++)', exeNames: ['g++'] },
-  { key: 'lcov', label: 'LCOV', exeNames: ['lcov'] },
-  { key: 'gcovr', label: 'gcovr', exeNames: ['gcovr'] },
+  { key: 'lcov', label: 'LCOV', exeNames: ['lcov'], optional: true },
+  { key: 'gcovr', label: 'gcovr', exeNames: ['gcovr'], optional: true },
 ];
 
 /** Windows-friendly exe candidates for a base name. */
@@ -121,7 +135,8 @@ export function uvAndVenvDirs(extra: string[] = []): { dir: string; kind: 'uv' |
 
 /** Candidate subdirectories that hold binaries inside an env dir. */
 function binSubdirs(envDir: string): string[] {
-  return [join(envDir, 'Scripts'), join(envDir, 'Library', 'bin'), join(envDir, 'bin'), join(envDir, 'Library', 'mingw-w64', 'bin')];
+  // include the env root itself: conda/venv/uv keep python.exe at the root.
+  return [envDir, join(envDir, 'Scripts'), join(envDir, 'Library', 'bin'), join(envDir, 'bin'), join(envDir, 'Library', 'mingw-w64', 'bin')];
 }
 
 /** Scan one env dir for the first hit of an exe name. */
@@ -175,9 +190,9 @@ export async function probeWslTools(timeoutMs = 8000): Promise<Record<string, st
   if (platform() !== 'win32') {
     return {};
   }
-  const script =
-    'for t in gcc g++ make cmake lcov gcovr mingw32-make; do printf "%s=%s\\n" "$t" "$(command -v $t 2>/dev/null || echo none)"; done';
-  const r = await run('wsl.exe', ['-e', 'sh', '-lc', script], { timeoutMs }).catch(() => null);
+    const script =
+      'for t in gcc g++ make cmake lcov gcovr mingw32-make python3; do printf "%s=%s\\n" "$t" "$(command -v $t 2>/dev/null || echo none)"; done';
+    const r = await run('wsl.exe', ['-e', 'sh', '-lc', script], { timeoutMs }).catch(() => null);
   return r && r.code === 0 ? parseWslSnapshot(r.stdout) : {};
 }
 
@@ -256,10 +271,24 @@ export async function discoverTools(opts: DiscoveryOptions = {}): Promise<ToolRo
       }
     }
     if (!found) {
-      // uv / venv
+      // uv / venv (uv stores pythons in per-version subdirs)
       outer: for (const d of uvVenv) {
         for (const n of def.exeNames) {
-          const exe = findInEnv(d.dir, n);
+          let exe = findInEnv(d.dir, n);
+          if (!exe && d.kind === 'uv') {
+            let children: string[] = [];
+            try {
+              children = readdirSync(d.dir).filter((c) => !c.startsWith('.'));
+            } catch {
+              /* not a container */
+            }
+            for (const c of children) {
+              exe = findInEnv(join(d.dir, c), n);
+              if (exe) {
+                break;
+              }
+            }
+          }
           if (exe) {
             found = { exe, kind: d.kind, detail: `${d.kind} ${d.dir}` };
             break outer;
@@ -286,6 +315,17 @@ export async function discoverTools(opts: DiscoveryOptions = {}): Promise<ToolRo
           rows[rows.indexOf(row)] = { ...row, exe: p, source: 'wsl', sourceDetail: `WSL（${row.label}）· 仅 WSL 内可用`, informational: true };
         }
       }
+    }
+  }
+
+  // Post-tag managed/optional semantics on the final rows.
+  for (const def of TOOL_DEFS) {
+    const row = rows.find((r) => r.key === def.key);
+    if (row && row.source === 'missing' && def.managed) {
+      row.managed = true;
+    }
+    if (row && def.optional) {
+      row.optional = true;
     }
   }
   return rows;

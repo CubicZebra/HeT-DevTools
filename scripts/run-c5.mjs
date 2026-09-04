@@ -20,6 +20,7 @@ const candidates = [
 ];
 const vscodeExecutablePath = candidates.find((p) => p && existsSync(p));
 process.env.VSLANG = '1033';
+process.env.HET_NO_UI = '1'; // automation: never show on-boarding/notifications
 rmSync(join(root, '.vscode-test'), { recursive: true, force: true });
 
 async function main() {

@@ -177,6 +177,14 @@
         "title": "%cmd.newProject%"
       },
       {
+        "command": "het.newProjectHere",
+        "title": "%cmd.newProjectHere%"
+      },
+      {
+        "command": "het.chipOverview",
+        "title": "%cmd.chipOverview%"
+      },
+      {
         "command": "het.templateUpdate",
         "title": "%cmd.templateUpdate%"
       },
@@ -185,6 +193,15 @@
         "title": "%cmd.cockpit%"
       }
     ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "het.newProjectHere",
+          "when": "explorerResourceIsFolder",
+          "group": "het@1"
+        }
+      ]
+    },
     "chatParticipants": [
       {
         "id": "het.assistant",

@@ -32,29 +32,28 @@ fcpp 模板用 Conan / CMake / CI / Doxygen / semantic-release 把工程保障�
 2. 打开一个含 `metadata.json` 的 fcpp 项目（模板生成或自建均可）——扩展自动激活。
 3. 命令面板（`Ctrl+Shift+P`）→ `HeT DevTools: 打开仪表盘`。
 4. 依次点：`构建并测试` → `覆盖率视图` → `文档中心`。
-5. 想从零开始？`HeT DevTools: 从模板初始化新项目`（版本锁定、离线可用本地源）。
+5. 想从零开始？在 Explorer 里右键一个文件夹 →「在此初始化 fcpp 项目」（零弹窗），或命令面板 `HeT DevTools: 从模板初始化新项目`（向导）。
 
 > 所有“写文件”操作都遵循 **预览 → 确认 → 写回（.bak 备份）**，扩展绝不自动改动 `include/` / `src/` / `conanfile.py`。
 
 ## 隐身设计（Invisible by Default）
 
-装之前 VS Code 什么样，装之后还是什么样——**没有侧边图标、没有欢迎页**。唯一的常驻变化：打开 fcpp 工程（或空工作区）时，**状态栏出现一枚 HeT chip**。
+装之前 VS Code 什么样，装之后还是什么样——**没有侧边图标、没有欢迎页、没有常驻提示**。唯一的变化：打开含 fcpp 工程后，**状态栏右下出现一枚 HeT chip**（监控 only；无工程时 chip 完全隐藏）。
 
-- **悬停 chip** → 弹出简约概况（健康分 / 最近构建 / 测试 x/y / 模板状态），每项带命令链接直达。
-- **点击 chip** → 打开仪表盘概览；空工作区时点击直接进入新建项目向导。
+- **悬停 chip** → 简约监控概况（健康分 / 最近构建 / 测试 x/y / 构建运行时），纯图标文本、无命令链接——只读监控，绝无“可点项”。
+- **点击 chip** → 键盘可达的 QuickPick 概况：打开仪表盘 / 构建并测试 / 仅构建 / 依赖 / 文档 / 质量 / 提交 / 发布 / 测试结果 / 一键体检。
+- **没有项目时从零开始**：Explorer 右键任意文件夹 →「在此初始化 fcpp 项目」——**全程零弹窗零通知**，创建即静默完成并自动打开项目；或走命令面板的五步向导。
 - 其余全部功能藏于命令面板 / QuickPick / `@het` Chat，按需出现、零打扰。
 
 ## 通用工具链发现（多来源 · 可失败 · 可手动指定）
 
-默认 PowerShell 里找不到工具时，扩展自动多来源嗅探：PATH → conda/mamba 环境（含 base、`~/.conda/envs`、ProgramData 等，优先语义化环境名 build/dev/het）→ uv（`~/.local/share/uv`）→ 工作区 venv；Windows 上还会报告 WSL 内可用的 gcc/g++/make/lcov/gcovr（信息性，不混入 Windows 构建）。找到后自动把对应目录注入子进程 PATH，让 conan 构建、文档（doxygen/graphviz）、质量（clang-format 等）开箱即用。
+默认 PowerShell 里找不到工具时，扩展自动多来源嗅探：PATH → conda/mamba 环境（含 base、`~/.conda/envs`、ProgramData 等，优先语义化环境名 build/dev/het）→ uv（`~/.local/share/uv`）→ 工作区 venv；Windows 上还会报告 WSL 内可用的 gcc/g++/make/lcov/gcovr（信息性，不混入 Windows 构建）。找到后自动把对应目录注入子进程 PATH，让 conan 构建、文档（doxygen/graphviz）、质量（clang-format 等）开箱即用。测试依赖（gtest/benchmark）由 conan 托管时显示为“构建时自动获取”，无需主机安装。
 
-嗅探**允许失败**：仪表盘概览「环境与工具链」分区逐项显示 ✓/✗ 与来源；未找到的项可点「手动指定」填可执行文件路径（写入 het.tools.* 并即时生效），或点「清除」恢复自动嗅探。一切无需命令行。
+嗅探**允许失败**：仪表盘概览「环境与工具链」分区逐项显示 ✓/✗ 与来源（conda 推断标注“启发式推断 · 极可能”，可点「手动指定」覆写为确切路径并即时生效，或「清除」恢复自动）；未找到的项绝不阻塞，需要时回退手动指定。一切无需命令行。
 
+## 离线新建项目（内置模板 · 零弹窗）
 
-默认 PowerShell 里没有 conan 时，扩展自动嗅探 conda 环境（miniforge / miniconda / anaconda、~/.conda/envs、ProgramData 等）：找到含 conan 的环境（优先 build）后，自动把其 Scripts / Library/bin / condabin 注入子进程 PATH，等价于已执行 conda activate。嗅探结果显示在仪表盘概览分区（“构建运行时：conan X · conda env build”）与状态栏 chip 悬停概况。Windows 上新项目默认关闭代码覆盖率（MSVC 不支持），并自动对测试包做 GBK 兼容补丁。
-## 离线新建项目（内置模板）
-
-扩展自带 fcpp 模板快照（约 2 MB，打包进 vsix）。即使完全断网，也能在空工作区通过「＋ 新建 fcpp 项目」创建标准工程：在线源不可用时自动回退 内置模板 → workspace/fcpp 开发副本（开发者仓库）→ het.template.localPath → HET_TEMPLATE_LOCAL，降级都会明确提示并写入 .het/template-ref.json。
+扩展自带 fcpp 模板快照（约 2 MB，打包进 vsix）。**完全断网也能建工程**：Explorer 右键任意文件夹 →「在此初始化 fcpp 项目」，全程零弹窗零通知，创建即静默完成并自动打开项目。模板源选择链：在线固定哈希（推荐）→ 内置模板 → workspace/fcpp 开发副本 → het.template.localPath → HET_TEMPLATE_LOCAL；在线不可用时自动回退本地，实际来源写入 `.het/template-ref.json`（供模板更新检查）。Windows 上新项目默认关闭代码覆盖率（MSVC 不支持），并自动对测试包做 GBK 兼容补丁。
 
 ## 仪表盘（唯一工作台，可不开）
 
@@ -65,7 +64,7 @@ fcpp 模板用 Conan / CMake / CI / Doxygen / semantic-release 把工程保障�
 - 概览区：健康分 / 最近构建 / 测试结果三枚 chip + 「一键体检」默认折叠；测试分区收录失败用例。
 - 构建/测试运行时**底部日志抽屉自动展开**，成功 3 秒收起；失败自动展开「问题」提示并映射到问题面板。
 - **依赖分区内可直接增删依赖**；`HeT DevTools: 添加依赖` 走 QuickPick 搜索流（内置 ConanCenter 精选索引，离线可用，可选目标模块，杜绝手误）。
-- **五步新建项目向导**（空工作区自动提示一次）：身份 → 构建参数 → 开关 → 确认；模板源三选（固定哈希推荐 / 在线最新 / 本地模板），在线不可用自动回退本地并明确提示。
+- **五步新建项目向导**：身份 → 构建参数 → 开关 → 确认；模板源三选（固定哈希推荐 / 在线最新 / 本地模板），在线不可用自动回退本地；成功即自动打开项目。
 - 最后页面与向导草稿自动持久化；zh/en chrome 切换；深浅主题全适配。
 
 ## 命令一览
@@ -73,6 +72,7 @@ fcpp 模板用 Conan / CMake / CI / Doxygen / semantic-release 把工程保障�
 | 命令 | 用途 |
 |------|------|
 | `HeT DevTools: 打开仪表盘` | 健康分 / 环境 / 快捷动作 |
+| `HeT DevTools: 在此初始化 fcpp 项目` | Explorer 文件夹右键：零弹窗建项目并自动打开 |
 | `HeT DevTools: 构建项目` / `构建并测试` | `conan create`，诊断映射问题面板 |
 | `HeT DevTools: 依赖管理器` | 四桶依赖增删（conandata + metadata 双写） |
 | `HeT DevTools: 新增模块` | 成对文件骨架（导入标记/双语注释/@exporter） |

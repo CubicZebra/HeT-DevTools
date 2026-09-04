@@ -28,5 +28,7 @@
   "cmd.patent": "HeT DevTools: 专利挖掘向导",
   "cmd.newProject": "HeT DevTools: 从模板初始化新项目",
   "cmd.templateUpdate": "HeT DevTools: 检查模板更新",
-  "cmd.cockpit": "HeT DevTools: 仪表盘"
+  "cmd.cockpit": "HeT DevTools: 仪表盘",
+  "cmd.chipOverview": "HeT DevTools: 打开监控概况",
+  "cmd.newProjectHere": "HeT DevTools: 在此初始化 fcpp 项目"
 }

@@ -1,7 +1,8 @@
-// Runs the C6 check fully offline (two phases: empty workspace → chip hint,
-// mini-fcpp project → chip + dashboard section focus + deps commands).
+// Runs the C6 check fully offline (two phases: empty workspace → chip hidden +
+// init-here registered, mini-fcpp project → chip overview + dashboard deps).
 // Usage: npm run test:c6
 import { runTests } from '@vscode/test-electron';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -20,25 +21,41 @@ const candidates = [
 ];
 const vscodeExecutablePath = candidates.find((p) => p && existsSync(p));
 process.env.VSLANG = '1033';
+process.env.HET_NO_UI = '1'; // automation: never show on-boarding/notifications
+
+/** Kill any test VS Code still holding the .vscode-test user-data dir. */
+function killTestCode() {
+  try {
+    execFileSync('powershell', [
+      '-NoProfile', '-Command',
+      "Get-CimInstance Win32_Process -Filter \"Name='Code.exe'\" | Where-Object { $_.CommandLine -like '*\\.vscode-test*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+    ], { stdio: 'ignore' });
+  } catch { /* best-effort */ }
+}
+
+/** Run one phase; if the window shows no sign of completing within 3 min, kill it. */
+async function runPhase(name, ws) {
+  process.env.HET_C6_PHASE = name;
+  const p = runTests({
+    vscodeExecutablePath,
+    extensionDevelopmentPath: root,
+    extensionTestsPath: join(root, 'out', 'test-integration', 'c6.js'),
+    launchArgs: [ws],
+  });
+  const done = await Promise.race([
+    p.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 3 * 60_000)),
+  ]);
+  if (!done) {
+    killTestCode();
+    throw new Error(`[c6] ${name}-phase window alive >3 min without completing — force killed`);
+  }
+  console.log(`[c6] ${name}-phase host exited cleanly`);
+}
 
 async function main() {
-  process.env.HET_C6_PHASE = 'empty';
-  await runTests({
-    vscodeExecutablePath,
-    extensionDevelopmentPath: root,
-    extensionTestsPath: join(root, 'out', 'test-integration', 'c6.js'),
-    launchArgs: [emptyWs],
-  });
-  console.log('[c6] empty-phase host exited cleanly');
-
-  process.env.HET_C6_PHASE = 'proj';
-  await runTests({
-    vscodeExecutablePath,
-    extensionDevelopmentPath: root,
-    extensionTestsPath: join(root, 'out', 'test-integration', 'c6.js'),
-    launchArgs: [miniFcpp],
-  });
-  console.log('[c6] project-phase host exited cleanly');
+  await runPhase('empty', emptyWs);
+  await runPhase('proj', miniFcpp);
 }
 
 main().catch((err) => {

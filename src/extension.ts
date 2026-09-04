@@ -74,8 +74,40 @@ let onboardingNotified = false;
 let lastChip: { text: string; tooltip: string; command?: string } | null = null;
 const isTestHost = process.argv.some((a) => a.includes('--extensionTestsPath'));
 
+/**
+ * True inside any automation host (unit/integration mocha, the installed-vsix
+ * verify runner, or any harness that sets HET_NO_UI=1). These hosts must stay
+ * zero-manual: no window toasts that a human would have to dismiss.
+ */
+function quietHost(): boolean {
+  return isTestHost || !!process.env.HET_VERIFY_PHASE || !!process.env.HET_NO_UI;
+}
+
+/** A no-op-safe wrapper for success/error toasts that would distract in automation. */
+function maybeToast(kind: 'info' | 'warn' | 'error', message: string, ...buttons: string[]): Thenable<string | undefined> | undefined {
+  if (quietHost()) {
+    log(message.replace(/\n/g, ' '));
+    return undefined;
+  }
+  if (kind === 'error') {
+    return vscode.window.showErrorMessage(message, ...buttons);
+  }
+  if (kind === 'warn') {
+    return vscode.window.showWarningMessage(message, ...buttons);
+  }
+  return vscode.window.showInformationMessage(message, ...buttons);
+}
+
 /** Sniffed conan runtime (conda env + PATH emulation), cached 30 s. */
-let conanRuntime: { exe: string; envName?: string; pathPrefix?: string; version?: string; at: number } | null = null;
+let conanRuntime: {
+  exe: string;
+  envName?: string;
+  pathPrefix?: string;
+  version?: string;
+  at: number;
+  /** True when the user pinned it manually (het.tools.conan / het.tools.envDir). */
+  overrideUser?: boolean;
+} | null = null;
 /** Generic toolchain discovery (multi-source), cached 60 s. */
 let toolRowsCache: { rows: ToolRow[]; at: number } | null = null;
 
@@ -134,6 +166,9 @@ async function handleEnvManualAction(action: string, tool: string): Promise<void
       delete next[tool];
       await vscode.workspace.getConfiguration('het').update('tools', next, vscode.ConfigurationTarget.Global);
       await applyToolOverrides();
+      if (tool === 'conan' || tool === 'envDir') {
+        await ensureConanRuntime(true);
+      }
       void ensureToolDiscovery(true);
       void vscode.window.showInformationMessage(`已清除 ${def.label} 的手动指定，恢复自动嗅探。`);
     }
@@ -161,37 +196,64 @@ async function handleEnvManualAction(action: string, tool: string): Promise<void
   }
   await vscode.workspace.getConfiguration('het').update('tools', next, vscode.ConfigurationTarget.Global);
   await applyToolOverrides();
+  if (tool === 'conan' || tool === 'envDir') {
+    await ensureConanRuntime(true);
+  }
   await ensureToolDiscovery(true);
   void vscode.window.showInformationMessage(v ? `已手动指定 ${def.label} = ${v}（已写入 het.tools.${tool} 并注入工具链）` : `已清除 ${def.label} 手动指定。`);
 }
 
-async function ensureConanRuntime(): Promise<typeof conanRuntime> {
-  if (conanRuntime && Date.now() - conanRuntime.at < 30_000) {
+async function ensureConanRuntime(force = false): Promise<typeof conanRuntime> {
+  if (!force && conanRuntime && Date.now() - conanRuntime.at < 30_000) {
     return conanRuntime;
   }
-  const r = await resolveConanRuntime();
-  if (!r) {
+  // User-pinned env (V3-4): a configured envDir with conan wins over heuristics.
+  const tools = toolOverridesConfig();
+  const overridePath = (tools['conan'] ?? '').trim();
+  const overrideEnv = (tools['envDir'] ?? '').trim();
+  let pinned: { exe: string; prefix?: string; envName?: string } | undefined;
+  if (overridePath && existsSync(overridePath)) {
+    pinned = { exe: overridePath };
+  } else if (overrideEnv && existsSync(overrideEnv)) {
+    for (const sub of ['Scripts', join('Library', 'bin'), 'bin']) {
+      const cand = join(overrideEnv, sub, process.platform === 'win32' ? 'conan.exe' : 'conan');
+      if (existsSync(cand)) {
+        pinned = {
+          exe: cand,
+          envName: 'custom',
+          prefix: [join(overrideEnv, 'Scripts'), join(overrideEnv, 'Library', 'bin'), join(overrideEnv, 'condabin')].join(delimiter),
+        };
+        break;
+      }
+    }
+  }
+
+  const resolved = pinned ? undefined : await resolveConanRuntime();
+  const exe = pinned?.exe ?? resolved?.exe;
+  if (!exe) {
     conanRuntime = null;
     return null;
   }
-  const rt = r.runtime;
-  if (rt?.pathPrefix && !(process.env.PATH ?? '').includes(rt.envDir)) {
-    process.env.PATH = `${rt.pathPrefix}${delimiter}${process.env.PATH ?? ''}`;
-    log(`[conda] emulated activate of env '${rt.envName}' for child toolchains (${rt.envDir})`);
+  const rt = resolved?.runtime;
+  const prefix = pinned?.prefix ?? rt?.pathPrefix;
+  if (prefix && !(process.env.PATH ?? '').includes(rt?.envDir ?? overrideEnv)) {
+    process.env.PATH = `${prefix}${delimiter}${process.env.PATH ?? ''}`;
+    log(`[conda] PATH prefix for ${pinned?.envName ?? rt?.envName ?? 'env'} (${rt?.envDir ?? overrideEnv})`);
   }
   let version = '';
-  const v = await run(r.exe, ['--version'], { timeoutMs: 15000 }).catch(() => null);
+  const v = await run(exe, ['--version'], { timeoutMs: 15000 }).catch(() => null);
   if (v && v.code === 0) {
     version = v.stdout.split(/\r?\n/)[0].trim();
   }
   conanRuntime = {
-    exe: r.exe,
-    envName: rt?.envName,
-    pathPrefix: rt?.pathPrefix,
+    exe,
+    envName: pinned?.envName ?? rt?.envName,
+    pathPrefix: prefix,
     version,
     at: Date.now(),
+    overrideUser: !!pinned,
   };
-  log(`[conda] conan=${r.exe} env=${rt?.envName ?? 'PATH'} version=${version}`);
+  log(`[conda] conan=${exe} env=${conanRuntime.envName ?? 'PATH'} version=${version}${conanRuntime.overrideUser ? ' (用户自定义)' : ''}`);
   await refreshChip();
   return conanRuntime;
 }
@@ -249,7 +311,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   contextRef = context;
   track('activation');
 
-  statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   context.subscriptions.push(statusItem);
   await refreshStatus();
 
@@ -271,7 +333,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       lastTest: lastTestSummary
         ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped }
         : null,
-      runtime: rt ? { version: rt.version, envName: rt.envName } : null,
+      runtime: rt ? { version: rt.version, envName: rt.envName, custom: rt.overrideUser === true } : null,
       envRows,
     };
   });
@@ -513,8 +575,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         prefer: (draft.source as 'pinned' | 'release' | 'local' | undefined) ?? undefined,
       });
       if (res.ok) {
-        void vscode.window.showInformationMessage(res.message);
+        log(`[wizard] created ${name} @ ${dest}`);
         await refreshStatus();
+        if (!isTestHost) {
+          await openProjectFolder(dest);
+        }
       }
       return { ok: res.ok, message: res.message };
     });
@@ -564,7 +629,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.getCurrentProject', () => currentProject?.metadata?.name ?? null),
     vscode.commands.registerCommand('het.hasProject', () => currentProject !== undefined),
     vscode.commands.registerCommand('het.cockpit', () => openCockpitPanel(context)),
-    vscode.commands.registerCommand('het.getCockpitPage', () => getCockpitState().page),
     vscode.commands.registerCommand('het.getCockpitState', () => getCockpitState()),
     vscode.commands.registerCommand('het.getChipState', () => lastChip),
     vscode.commands.registerCommand('het.getConanRuntime', async () => ensureConanRuntime()),
@@ -592,6 +656,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.audit', () => { track('audit'); return runAuditReport(); }),
     vscode.commands.registerCommand('het.patent', () => runPatentWizard()),
     vscode.commands.registerCommand('het.newProject', () => runNewProjectWizard()),
+    vscode.commands.registerCommand('het.chipOverview', () => showChipOverview()),
+    vscode.commands.registerCommand('het.newProjectHere', (folder?: vscode.Uri | string) => initHere(folder)),
     vscode.commands.registerCommand('het.newProjectDirect', (opts: NewProjectOpts) => newProjectFromTemplate(opts)),
     vscode.commands.registerCommand('het.templateUpdate', async () => {
       await runTemplateUpdateCheck();
@@ -2541,9 +2607,11 @@ async function runNewProjectWizard(): Promise<void> {
   }
   const r = await newProjectFromTemplate({ name, description, dest, confirmed: true });
   if (r.ok) {
-    void vscode.window.showInformationMessage(r.message + '\n用“文件 → 打开文件夹”打开后即可使用驾驶舱/文档/质量等功能。');
+    log(`[wizard] created ${name} @ ${dest}`);
+    await refreshStatus();
+    await openProjectFolder(dest);
   } else {
-    void vscode.window.showErrorMessage(r.message);
+    maybeToast('error', r.message);
   }
 }
 
@@ -2679,7 +2747,8 @@ async function refreshStatus(): Promise<void> {
       emitCockpitEvent({ type: 'wizard:open' });
     }
     log('no fcpp project in current workspace');
-    await maybeOnboardEmptyWorkspace();
+    // Never block on the onboarding prompt — it is a gentle hint, not a gate.
+    void maybeOnboardEmptyWorkspace();
   }
   await emitTemplateBehind();
   await refreshChip();
@@ -2717,7 +2786,6 @@ async function refreshChip(): Promise<void> {
   const st = getCockpitState();
   const spec = chipSpec({
     projectName: currentProject?.metadata?.name ?? '',
-    workspaceEmpty: await isWorkspaceEmpty(),
     health: lastHealth?.score ?? null,
     running: st.top.running,
     lastBuildOk: lastBuildOk ?? null,
@@ -2725,7 +2793,13 @@ async function refreshChip(): Promise<void> {
       ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped }
       : null,
     templateBehind: st.top.templateBehind,
-    conanEnv: conanRuntime ? (conanRuntime.envName ? `conda env ${conanRuntime.envName}` : 'PATH') : null,
+    conanEnv: conanRuntime
+      ? conanRuntime.overrideUser
+        ? '用户自定义'
+        : conanRuntime.envName
+          ? `conda env ${conanRuntime.envName}`
+          : 'PATH'
+      : null,
   });
   if (!spec) {
     statusItem.hide();
@@ -2733,11 +2807,84 @@ async function refreshChip(): Promise<void> {
     return;
   }
   statusItem.text = spec.text;
-  statusItem.tooltip = spec.tooltip;
+  statusItem.tooltip = new vscode.MarkdownString(spec.tooltip, true);
   statusItem.command = spec.command;
   statusItem.backgroundColor = spec.color ? new vscode.ThemeColor(spec.color) : undefined;
   statusItem.show();
   lastChip = { text: spec.text, tooltip: spec.tooltip, command: spec.command };
+}
+
+/** V3-3: click the chip → monitor overview QuickPick (keyboard reachable). */
+async function showChipOverview(): Promise<void> {
+  const st = getCockpitState();
+  const health = lastHealth?.score ?? st.top.health;
+  const buildState = lastBuildOk === null ? '未运行' : lastBuildOk ? '成功' : '失败';
+  const testLine = lastTestSummary
+    ? `通过 ${lastTestSummary.passed} · 失败 ${lastTestSummary.failed} · 跳过 ${lastTestSummary.skipped}`
+    : '未运行';
+  const items: { label: string; description?: string; detail?: string; cmd?: string }[] = [
+    { label: '$(home) 打开仪表盘（概览）', detail: '健康分 · 环境 · 动作', cmd: 'het.dashboard' },
+    { label: '$(beaker) 构建并测试', detail: 'conan create + GTest', cmd: 'het.test' },
+    { label: '$(tools) 仅构建', detail: buildState, cmd: 'het.build' },
+    { label: '$(package) 依赖', detail: 'QuickPick 搜索添加', cmd: 'het.addDependency' },
+    { label: '$(book) 文档中心', detail: 'Doxygen + Sphinx', cmd: 'het.docs' },
+    { label: '$(shield) 质量与安全', detail: 'format/tidy/schema/commitlint', cmd: 'het.quality' },
+    { label: '$(git-commit) 提交助手', detail: 'type(:emoji:)', cmd: 'het.commit' },
+    { label: '$(rocket) 发布', detail: 'Preflight + 门禁', cmd: 'het.release' },
+    { label: '$(report) 测试结果', detail: testLine, cmd: 'het.showTestResults' },
+    { label: '$(heart) 一键体检', detail: health === null ? '未体检' : `健康分 ${health}/100`, cmd: 'het.healthCheck' },
+  ];
+  const pick = await vscode.window.showQuickPick(items, {
+    placeHolder: `HeT 概况 — ${currentProject?.metadata?.name ?? 'fcpp 项目'}（Enter 直达）`,
+    matchOnDescription: true,
+  });
+  if (pick?.cmd) {
+    void vscode.commands.executeCommand(pick.cmd);
+  }
+}
+
+/** Whether auto-opening a freshly created project is allowed here. */
+function canAutoOpenFolder(): boolean {
+  if (isTestHost) {
+    return false;
+  }
+  if (process.env.HET_VERIFY_PHASE) {
+    return false; // inside the zero-manual verification host
+  }
+  return process.env.HET_AUTO_OPEN !== '0';
+}
+
+/** Open the freshly created project in the current window (skip in test hosts). */
+async function openProjectFolder(dest: string): Promise<void> {
+  if (!canAutoOpenFolder()) {
+    return;
+  }
+  try {
+    await new Promise((r) => setTimeout(r, 350));
+    await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(dest));
+  } catch (err) {
+    log(`[init] auto-open failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** V3-1/3-2: zero-interaction init from the Explorer folder context menu. */
+async function initHere(folder?: vscode.Uri | string): Promise<void> {
+  const folderPath = typeof folder === 'string' ? folder : folder?.fsPath ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!folderPath) {
+    void vscode.window.showWarningMessage('请在 Explorer 中右键一个文件夹，或先打开一个文件夹。');
+    return;
+  }
+  const raw = folderPath.split(/[\\/]/).pop() ?? 'my-lib';
+  const name = (raw.replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'my_lib').replace(/-/g, '_');
+  const res = await newProjectFromTemplate({ name, dest: folderPath, description: 'A C/C++ library based on fcpp', confirmed: true });
+  if (res.ok) {
+    // Deliberately NO toast here: creation is complete when the folder opens /
+    // the chip refreshes — the window must stay zero-manual (V3-2/V3-7).
+    await refreshStatus();
+    await openProjectFolder(folderPath);
+  } else {
+    maybeToast('error', res.message);
+  }
 }
 
 /** Run the full health check when stale (>60 s) and cache the score for the chip. */
@@ -2765,9 +2912,11 @@ async function ensureHealthCached(force: boolean): Promise<void> {
   }
 }
 
-/** V2-1: a single gentle onboarding notification on an empty workspace. */
+/** V3-1: a single gentle onboarding notification guiding to the Explorer menu. */
 async function maybeOnboardEmptyWorkspace(): Promise<void> {
-  if (onboardingNotified || isTestHost) {
+  // quietHost() (isTestHost OR the verify sandbox) must NEVER await a human
+  // button choice — that would hang the whole zero-manual run.
+  if (onboardingNotified || quietHost()) {
     return;
   }
   if (!(await isWorkspaceEmpty())) {
@@ -2779,11 +2928,11 @@ async function maybeOnboardEmptyWorkspace(): Promise<void> {
   }
   onboardingNotified = true;
   const pick = await vscode.window.showInformationMessage(
-    'HeT DevTools：当前为空工作区。可基于 fcpp 模板初始化一个标准 C/C++ 库工程（构建 / 测试 / 文档 / 发布开箱即用）。',
-    '新建项目',
+    'HeT DevTools：要在空文件夹里开始一个 C/C++ 库工程？\n在左侧 Explorer 中右键任意文件夹 →「在此初始化 fcpp 项目」（零操作），或运行命令面板中的初始化向导。',
+    '运行初始化向导',
     '不再提示',
   );
-  if (pick === '新建项目') {
+  if (pick === '运行初始化向导') {
     void vscode.commands.executeCommand('het.newProject');
   } else if (pick === '不再提示') {
     void ctx.workspaceState.update('het.onboard.dismissed', true);
@@ -2884,10 +3033,10 @@ async function buildProject(): Promise<void> {
   emitCockpitEvent({ type: 'issue:summary', count: issues.length });
 
   if (result.ok) {
-    void vscode.window.showInformationMessage(`构建成功 — ${project.metadata.name} (Debug)`);
+    maybeToast('info', `构建成功 — ${project.metadata.name} (Debug)`);
   } else {
     const detail = issues.length > 0 ? `${issues.length} 个错误/警告，详见“问题”面板` : '详见“输出 → HeT DevTools”';
-    void vscode.window.showErrorMessage(`构建失败：${detail}`);
+    maybeToast('error', `构建失败：${detail}`);
   }
   void refreshChip();
 }

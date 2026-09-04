@@ -41,18 +41,42 @@ const vscodeExecutablePath = candidates.find((p) => p && existsSync(p));
 process.env.HET_TEMPLATE_LOCAL = tpl;
 process.env.HET_C4_DEST = newProj;
 process.env.VSLANG = '1033';
+process.env.HET_NO_UI = '1'; // automation: never show on-boarding/notifications
 rmSync(join(root, '.vscode-test'), { recursive: true, force: true });
 
-async function main() {
-  // phase init (empty workspace)
-  process.env.HET_C4_PHASE = 'init';
-  await runTests({
+/** Kill any test VS Code still holding the .vscode-test user-data dir. */
+function killTestCode() {
+  try {
+    execFileSync('powershell', [
+      '-NoProfile', '-Command',
+      "Get-CimInstance Win32_Process -Filter \"Name='Code.exe'\" | Where-Object { $_.CommandLine -like '*\\.vscode-test*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+    ], { stdio: 'ignore' });
+  } catch { /* best-effort */ }
+}
+
+/** Run one phase; if the window shows no sign of completing within 4 min, kill it. */
+async function runPhase(name, ws) {
+  process.env.HET_C4_PHASE = name;
+  const p = runTests({
     vscodeExecutablePath,
     extensionDevelopmentPath: root,
     extensionTestsPath: join(root, 'out', 'test-integration', 'c4.js'),
-    launchArgs: [emptyWs],
+    launchArgs: [ws],
   });
-  console.log('[c4] init host exited cleanly');
+  const done = await Promise.race([
+    p.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 4 * 60_000)),
+  ]);
+  if (!done) {
+    killTestCode();
+    throw new Error(`[c4] ${name}-phase window alive >4 min without completing — force killed`);
+  }
+  console.log(`[c4] ${name} host exited cleanly`);
+}
+
+async function main() {
+  // phase init (empty workspace)
+  await runPhase('init', emptyWs);
 
   // advance the template by exactly one commit → update check must report 1
   writeFileSync(tplAdvance, 'template advanced by C4 runner\n', 'utf8');
@@ -63,14 +87,7 @@ async function main() {
   console.log('[c4] template advanced by 1 commit');
 
   // phase check (new project workspace)
-  process.env.HET_C4_PHASE = 'check';
-  await runTests({
-    vscodeExecutablePath,
-    extensionDevelopmentPath: root,
-    extensionTestsPath: join(root, 'out', 'test-integration', 'c4.js'),
-    launchArgs: [newProj],
-  });
-  console.log('[c4] check host exited cleanly');
+  await runPhase('check', newProj);
 }
 
 main().catch((err) => {
