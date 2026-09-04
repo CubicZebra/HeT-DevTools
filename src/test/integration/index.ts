@@ -51,7 +51,7 @@ export async function run(): Promise<void> {
   // GUI-rework P-G1: integrated cockpit opens, navigates and returns its state.
   await vscode.commands.executeCommand('het.cockpit');
   await new Promise((r) => setTimeout(r, 400));
-  await vscode.commands.executeCommand('het.getCockpitPage');
+  await vscode.commands.executeCommand('het.getCockpitState');
   await new Promise((r) => setTimeout(r, 200));
 
   console.log('[integration-smoke] OK - extension active in ' + folders[0].uri.fsPath);
