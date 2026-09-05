@@ -52,6 +52,7 @@ import { resolveTemplateSource, resolveCloneRef } from './core/templateService';
 import { discoverTools, TOOL_DEFS, ToolRow } from './core/toolchainDiscovery';
 import { getCurrentProvisionPlan, getHostCapabilities } from './features/env/provisionHost';
 import { providerLabel } from './core/provisionPlan';
+import { currentManagedStatus, managedPrepare, managedRemove } from './features/env/managedProvisioner';
 import { openHudPanel } from './features/hud/panel';
 import { HudEnvRow, HudModel, defaultHudActions, hudEnabled } from './features/hud/hudModel';
 import { TEMPLATE_REPO } from './core/templateDefaults';
@@ -669,6 +670,49 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.getEnvRows', async () => ensureToolDiscovery()),
     vscode.commands.registerCommand('het.getHostCapabilities', async (force?: boolean) => getHostCapabilities(!!force)),
     vscode.commands.registerCommand('het.getProvisionPlan', async (force?: boolean) => getCurrentProvisionPlan(!!force)),
+    vscode.commands.registerCommand('het.envStatus', () => {
+      const ctx = contextRef;
+      return ctx ? currentManagedStatus(ctx.globalStorageUri.fsPath, process.platform === 'win32') : { state: 'absent' as const, tools: {} };
+    }),
+    vscode.commands.registerCommand('het.envPrepare', async () => {
+      const ctx = contextRef;
+      if (!ctx) {
+        return { ok: false, state: 'absent' as const, message: '扩展未就绪。' };
+      }
+      const opts = {
+        storageRoot: ctx.globalStorageUri.fsPath,
+        isWin: process.platform === 'win32',
+        basePath: process.env.PATH ?? '',
+      };
+      // 一次同意：自动化宿主(quietHost)直接放行；真实用户仅首次确认一次。
+      let yes = quietHost() || ctx.globalState.get<boolean>('het.env.consented', false) === true;
+      if (!yes) {
+        const choice = await vscode.window.showWarningMessage(
+          '准备托管构建环境？将下载 conan/cmake/ninja 到扩展存储（可随时「移除托管环境」，卸载扩展自动清理）。',
+          { modal: true },
+          '同意并开始',
+          '取消',
+        );
+        if (choice !== '同意并开始') {
+          return { ok: false, state: 'absent', message: '已取消。' };
+        }
+        await ctx.globalState.update('het.env.consented', true);
+        yes = true;
+      }
+      const r = await managedPrepare({ ...opts, yes, onProgress: (m) => log(`[env] ${m}`) });
+      maybeToast(r.ok ? 'info' : 'error', r.message);
+      return r;
+    }),
+    vscode.commands.registerCommand('het.envRemove', () => {
+      const ctx = contextRef;
+      if (!ctx) {
+        return { ok: false, message: '扩展未就绪。' };
+      }
+      const r = managedRemove(ctx.globalStorageUri.fsPath);
+      void ctx.globalState.update('het.env.consented', false);
+      maybeToast(r.ok ? 'info' : 'error', r.message);
+      return r;
+    }),
     vscode.commands.registerCommand('het.refresh', () => refreshStatus()),
     vscode.commands.registerCommand('het.build', () => { track('build'); return buildProject(); }),
     vscode.commands.registerCommand('het.dashboard', (section?: string) => openDashboard(context, section)),
