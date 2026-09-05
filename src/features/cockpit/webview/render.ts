@@ -49,6 +49,10 @@ export interface OverviewPayload {
   runtime?: { version?: string; envName?: string; custom?: boolean } | null;
   /** Generic toolchain discovery rows (V2 env block). */
   envRows?: ToolRow[];
+  /** V4-1 provider decision (heuristic, non-binding). */
+  plan?: PlanView | null;
+  /** V4-2/V4-5 managed environment state (globalStorage). */
+  managed?: ManagedView | null;
 }
 
 export interface BuildTestPayload {
@@ -147,6 +151,59 @@ function envBlockHtml(rows: ToolRow[]): string {
   </details>`;
 }
 
+export interface PlanView {
+  label: string;
+  coverage: 'full' | 'partial' | 'none';
+  reason?: string;
+}
+
+export interface ManagedView {
+  state: 'absent' | 'provisioning' | 'ready' | 'error';
+  tools: Record<string, string>;
+  note?: string;
+}
+
+const MANAGED_STATE_ZH: Record<ManagedView['state'], string> = {
+  absent: '未准备（点「准备」即可离线自给 conan/cmake/ninja）',
+  provisioning: '准备中…',
+  ready: '已就绪（位于扩展存储 · 卸载自动清理）',
+  error: '异常（可重试，或移除后重新准备）',
+};
+
+/** V4-5: provider decision + managed env block (buttons post env:prepare/remove). */
+export function envTopHtml(plan?: PlanView | null, managed?: ManagedView | null): string {
+  const parts: string[] = [];
+  if (plan) {
+    const mark = plan.coverage === 'full' ? '✓' : plan.coverage === 'partial' ? '!' : '✗';
+    parts.push(
+      `<div class="drow"><span class="dk">${mark} 构建环境方案（启发式推断）</span><span class="dv dim">${esc(plan.label)}</span></div>`,
+    );
+    if (plan.reason) {
+      parts.push(`<div class="drow dim"><span class="dk">说明</span><span class="dv dim">${esc(plan.reason)}</span></div>`);
+    }
+  }
+  if (managed) {
+    const zh = MANAGED_STATE_ZH[managed.state] ?? managed.state;
+    const tools = Object.entries(managed.tools)
+      .map(([k, v]) => `${k} ${v}`)
+      .join(' · ');
+    const prep =
+      managed.state === 'ready'
+        ? ''
+        : `<button class="textbtn" data-page-action="env:prepare">${managed.state === 'absent' ? '准备托管环境' : '重试准备'}</button>`;
+    const rm = managed.state === 'absent' ? '' : `<button class="textbtn" data-page-action="env:remove">移除托管环境</button>`;
+    parts.push(
+      `<div class="drow"><span class="dk">托管环境（globalStorage · 卸载自动清理）</span>` +
+        `<span class="dv dim">${zh}${tools ? ` · ${esc(tools)}` : ''}${managed.note ? ` · ${esc(managed.note)}` : ''}</span>` +
+        `<span class="dv">${prep}${rm}</span></div>`,
+    );
+  }
+  if (parts.length === 0) {
+    return '';
+  }
+  return `<div class="env">${parts.join('')}</div>`;
+}
+
 function overviewContent(p: OverviewPayload): string {
   const health = p.healthScore === undefined ? '' : `<span class="chip ${p.healthScore >= 80 ? 'ok' : p.healthScore >= 50 ? 'warn' : 'fail'}">健康分 ${p.healthScore}</span>`;
   const tools = p.tools.map((t) => `<span class="status">${t.ok ? '✓' : '✗'} ${esc(t.name)}</span>`).join(' ');
@@ -164,6 +221,7 @@ function overviewContent(p: OverviewPayload): string {
       <div class="card"><div class="ct">最近测试</div><div class="cv">${p.lastTest ? `${statusMark((p.lastTest.failed ?? 0) === 0)} ${p.lastTest.passed ?? 0}/${(p.lastTest.failed ?? 0) + (p.lastTest.passed ?? 0)}` : '未运行'}</div></div>
     </div>
     ${runtime}
+    ${envTopHtml(p.plan ?? null, p.managed ?? null)}
     ${envBlockHtml(p.envRows ?? [])}
     <div class="row">${tools}</div>
     <div class="actions">

@@ -358,6 +358,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const snap = await buildSnapshot();
     const rt = await ensureConanRuntime();
     const envRows = await ensureToolDiscovery();
+    const plan = await getCurrentProvisionPlan(false).catch(() => null);
+    const storage = contextRef?.globalStorageUri.fsPath ?? '';
+    const managed = storage ? currentManagedStatus(storage, process.platform === 'win32') : null;
     return {
       projectName: currentProject?.metadata?.name,
       version: currentProject?.metadata?.version,
@@ -370,6 +373,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         : null,
       runtime: rt ? { version: rt.version, envName: rt.envName, custom: rt.overrideUser === true } : null,
       envRows,
+      plan: plan ? { label: providerLabel(plan.provider), coverage: plan.coverage, reason: plan.reason } : null,
+      managed: managed && managed.state !== 'absent' ? managed : null,
     };
   });
   setCockpitPageProvider('buildTest', async () => ({
@@ -550,6 +555,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   setCockpitPageHandler('overview', async (action, data) => {
     if (action === 'env:set' || action === 'env:clear') {
       await handleEnvManualAction(action, (data.tool ?? '').trim());
+      return;
+    }
+    if (action === 'env:prepare') {
+      await vscode.commands.executeCommand('het.envPrepare');
+      return;
+    }
+    if (action === 'env:remove') {
+      await vscode.commands.executeCommand('het.envRemove');
     }
   });
 
