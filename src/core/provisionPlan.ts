@@ -17,6 +17,8 @@
 export type ProviderId =
   | 'linux-native'
   | 'win-wsl2'
+  | 'win-wsl2-pending'
+  | 'win-wsl-required'
   | 'win-mingw'
   | 'macos-native'
   | 'unsupported';
@@ -79,6 +81,8 @@ const MAN = TOOLCHAIN_MANIFEST;
 const PROVIDER_LABEL: Record<ProviderId, string> = {
   'linux-native': 'Linux 原生（gcc 自供）',
   'win-wsl2': 'Windows · WSL2 托管 distro（gcc + lcov 全语义）',
+  'win-wsl2-pending': 'Windows · WSL2 已装但无发行版（需创建托管 distro）',
+  'win-wsl-required': 'Windows · 需要启用 WSL2（或开启 MinGW 兼容）',
   'win-mingw': 'Windows · MinGW-w64 自供（可接受降级）',
   'macos-native': 'macOS 原生（clang + 自供 lcov）',
   unsupported: '暂不支持该平台',
@@ -131,13 +135,25 @@ function lowDisk(caps: HostCapabilities): boolean {
 }
 
 /**
+ * Provider preferences (user-configurable, defaults match the auto path).
+ */
+export interface ProvisionPrefs {
+  /** MinGW fallback allowed when WSL2 is absent (het.env.allowMingw). */
+  allowMingw?: boolean;
+}
+
+/**
  * Provider selection — deterministic, capability-first. Windows semantics:
- *   WSL2 available+ready → win-wsl2 (full, Linux-identical);
- *   otherwise → win-mingw (partial coverage, acceptable);
+ *   WSL2 present + distro ready → win-wsl2 (full, Linux-identical);
+ *   WSL2 present but NO distro  → win-wsl2-pending (guide to create one —
+ *                                 never silently degrade to MinGW);
+ *   no WSL2 → win-mingw only when allowMingw (default true); else
+ *             win-wsl-required (guide: enable WSL2 or open MinGW compat);
  *   MSVC is NEVER auto-chosen — only an explicit `toolchain: system` override
  *   (handled by the caller) routes to the MSVC compatibility mode.
  */
-export function resolveProviderDecision(caps: HostCapabilities): ProviderDecision {
+export function resolveProviderDecision(caps: HostCapabilities, prefs?: ProvisionPrefs): ProviderDecision {
+  const allowMingw = prefs?.allowMingw !== false;
   if (caps.platform === 'linux') {
     return {
       provider: 'linux-native',
@@ -165,16 +181,27 @@ export function resolveProviderDecision(caps: HostCapabilities): ProviderDecisio
         manifest: MAN,
         note: caps.virtualizationEnabled
           ? '覆盖率由 WSL2 内 gcov/lcov 全量支持。'
-          : '虚拟化未确认：WSL2 可能无法启动，将自动降级 MinGW。',
+          : '虚拟化未确认：WSL2 可能无法启动，将引导创建发行版。',
       };
     }
     if (caps.wslAvailable && !caps.wslDefaultReady) {
+      // WSL exists but no distro: guide to create a managed one — do NOT
+      // silently fall to MinGW here (the user only lacks a distribution).
       return {
-        provider: 'win-mingw',
-        reason: 'Windows：检测到 wsl.exe 但无就绪发行版，先用 MinGW 自供（可接受）',
+        provider: 'win-wsl2-pending',
+        reason: 'Windows：检测到 WSL2，但尚无可用发行版',
         coverage: 'partial',
         manifest: MAN,
-        note: '在 PowerShell 执行 `wsl --install` 并安装发行版后可升级为 WSL2 全语义。',
+        note: '在 dashboard「托管环境」执行「创建托管 distro het-fcpp」后即为 WSL2 全语义（gcc + lcov）。',
+      };
+    }
+    if (!allowMingw) {
+      return {
+        provider: 'win-wsl-required',
+        reason: 'Windows：无 WSL2，且 MinGW 兼容车道已关闭（het.env.allowMingw=false）',
+        coverage: 'none',
+        manifest: MAN,
+        note: '请启用 WSL2（需要虚拟化，`wsl --install`），或在设置中开启 het.env.allowMingw 以使用 MinGW 兼容车道（覆盖率部分）。',
       };
     }
     return {
@@ -183,8 +210,8 @@ export function resolveProviderDecision(caps: HostCapabilities): ProviderDecisio
       coverage: 'partial',
       manifest: MAN,
       note: caps.msvcAvailable
-        ? '检测到 MSVC：可在项目 metadata 显式设 toolchain=system 走 MSVC 兼容模式（无覆盖率）。'
-        : '需要虚拟化/启用 WSL 才能获得完整覆盖率语义；当前 MinGW 提供 gcc 构建/测试。',
+        ? '检测到 MSVC：可在项目 metadata 显式设 toolchain=system 走 MSVC 兼容模式（无覆盖率）。MinGW 兼容车道可用设置 het.env.allowMingw 关闭。'
+        : '需要虚拟化/启用 WSL 才能获得完整覆盖率语义；当前 MinGW 提供 gcc 构建/测试（可用 het.env.allowMingw 关闭）。',
     };
   }
   return {

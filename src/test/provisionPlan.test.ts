@@ -49,14 +49,15 @@ describe('V4-1 provisionPlan', () => {
     assert.strictEqual(d.coverage, 'full');
   });
 
-  it('win32 + wsl present but no ready distro → mingw fallback, partial, actionable note', () => {
+  it('win32 + wsl present but no ready distro → win-wsl2-pending (guide, never silent mingw)', () => {
     const d = resolveProviderDecision(caps({ platform: 'win32', wslAvailable: true, wslDefaultReady: false }));
-    assert.strictEqual(d.provider, 'win-mingw');
+    assert.strictEqual(d.provider, 'win-wsl2-pending');
     assert.strictEqual(d.coverage, 'partial');
-    assert.ok(d.note.includes('wsl --install'), 'note must teach the upgrade path');
+    assert.ok(d.note.includes('托管 distro'), 'note must guide creating the managed distro');
+    assert.ok(!d.note.includes('MinGW'), 'no silent MinGW degradation when WSL exists');
   });
 
-  it('win32 + no wsl → mingw (acceptable), MSVC never auto-chosen', () => {
+  it('win32 + no wsl → mingw when allowed (default), never auto-msvc', () => {
     const plain = resolveProviderDecision(caps({ platform: 'win32' }));
     assert.strictEqual(plain.provider, 'win-mingw');
     assert.strictEqual(plain.coverage, 'partial');
@@ -64,6 +65,14 @@ describe('V4-1 provisionPlan', () => {
     const withMsvc = resolveProviderDecision(caps({ platform: 'win32', msvcAvailable: true }));
     assert.strictEqual(withMsvc.provider, 'win-mingw');
     assert.ok(withMsvc.note.includes('MSVC'), 'note should mention the explicit compat mode');
+  });
+
+  it('allowMingw=false + no wsl → win-wsl-required with guidance (no lane)', () => {
+    const d = resolveProviderDecision(caps({ platform: 'win32' }), { allowMingw: false });
+    assert.strictEqual(d.provider, 'win-wsl-required');
+    assert.strictEqual(d.coverage, 'none');
+    assert.ok(d.note.includes('wsl --install'), 'guide to enable WSL');
+    assert.ok(d.note.includes('het.env.allowMingw'), 'mention how to re-open the compat lane');
   });
 
   it('unsupported platform reported honestly', () => {

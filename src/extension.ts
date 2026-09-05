@@ -51,7 +51,7 @@ import { renderSearchQuery, renderTechDisclosure, PatentInput } from './core/pat
 import { resolveTemplateSource, resolveCloneRef } from './core/templateService';
 import { discoverTools, TOOL_DEFS, ToolRow } from './core/toolchainDiscovery';
 import { getCurrentProvisionPlan, getHostCapabilities } from './features/env/provisionHost';
-import { providerLabel } from './core/provisionPlan';
+import { providerLabel, ProvisionPrefs } from './core/provisionPlan';
 import { currentManagedStatus, managedPrepare, managedRemove } from './features/env/managedProvisioner';
 import { getWslLaneStatus } from './features/env/wslProbe';
 import { getMacosLaneStatus } from './features/env/macosProbe';
@@ -360,7 +360,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const snap = await buildSnapshot();
     const rt = await ensureConanRuntime();
     const envRows = await ensureToolDiscovery();
-    const plan = await getCurrentProvisionPlan(false).catch(() => null);
+    const plan = await getCurrentProvisionPlan(false, provisionPrefs()).catch(() => null);
     const storage = contextRef?.globalStorageUri.fsPath ?? '';
     const managed = storage ? currentManagedStatus(storage, process.platform === 'win32') : null;
     return {
@@ -378,7 +378,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       plan: plan ? { label: providerLabel(plan.provider), coverage: plan.coverage, reason: plan.reason } : null,
       managed: managed && managed.state !== 'absent' ? managed : null,
       wsl:
-        process.platform === 'win32' && plan?.provider === 'win-wsl2'
+        process.platform === 'win32' && (plan?.provider === 'win-wsl2' || plan?.provider === 'win-wsl2-pending')
           ? ((await getWslLaneStatus(false).catch(() => null)) as { distro?: string; ready: boolean; tools: Record<string, string>; note?: string } | null)
           : null,
       osx:
@@ -692,7 +692,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.getConanRuntime', async () => ensureConanRuntime()),
     vscode.commands.registerCommand('het.getEnvRows', async () => ensureToolDiscovery()),
     vscode.commands.registerCommand('het.getHostCapabilities', async (force?: boolean) => getHostCapabilities(!!force)),
-    vscode.commands.registerCommand('het.getProvisionPlan', async (force?: boolean) => getCurrentProvisionPlan(!!force)),
+    vscode.commands.registerCommand('het.getProvisionPlan', async (force?: boolean) => getCurrentProvisionPlan(!!force, provisionPrefs())),
     vscode.commands.registerCommand('het.getWslLane', async (force?: boolean) => getWslLaneStatus(!!force)),
     vscode.commands.registerCommand('het.getMacosLane', async (force?: boolean) => getMacosLaneStatus(!!force)),
     vscode.commands.registerCommand('het.envStatus', () => {
@@ -2903,6 +2903,11 @@ function hudFontSize(): number {
   return typeof n === 'number' && Number.isFinite(n) ? n : 13.5;
 }
 
+/** V4-3: user prefs for provider selection (het.env.allowMingw, default on). */
+function provisionPrefs(): ProvisionPrefs {
+  return { allowMingw: vscode.workspace.getConfiguration('het').get<boolean>('env.allowMingw', true) !== false };
+}
+
 /** V4-6: hide the chip for 5 minutes (Snooze), then it returns. */
 function snoozeChip(minutes = 5): void {
   if (chipSnoozeTimer) {
@@ -2924,7 +2929,7 @@ function disableHud(): void {
 
 async function assembleHudModel(): Promise<HudModel> {
   const st = getCockpitState();
-  const plan = await getCurrentProvisionPlan(true).catch(() => null);
+  const plan = await getCurrentProvisionPlan(true, provisionPrefs()).catch(() => null);
   const tools = await ensureToolDiscovery().catch(() => []);
   const env: HudEnvRow[] = [];
   const wanted = new Set(['conan', 'cmake', 'python', 'ninja', 'gtest']);

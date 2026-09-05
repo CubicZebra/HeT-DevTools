@@ -11,6 +11,7 @@ import { arch, platform } from 'node:os';
 import { run } from '../../utils/exec';
 import {
   HostCapabilities,
+  ProvisionPrefs,
   ProviderDecision,
   parseFakeHost,
   providerLabel,
@@ -67,9 +68,9 @@ export async function getHostCapabilities(force = false): Promise<HostCapabiliti
   return caps;
 }
 
-export async function getCurrentProvisionPlan(force = false): Promise<ProviderDecision> {
+export async function getCurrentProvisionPlan(force = false, prefs?: ProvisionPrefs): Promise<ProviderDecision> {
   const caps = await getHostCapabilities(force);
-  return resolveProviderDecision(caps);
+  return resolveProviderDecision(caps, prefs);
 }
 
 export { providerLabel, resolveProviderDecision };
