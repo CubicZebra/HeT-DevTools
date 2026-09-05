@@ -50,6 +50,7 @@ import { renderAuditMarkdown, AuditInput } from './core/auditReport';
 import { renderSearchQuery, renderTechDisclosure, PatentInput } from './core/patent';
 import { resolveTemplateSource, resolveCloneRef } from './core/templateService';
 import { discoverTools, TOOL_DEFS, ToolRow } from './core/toolchainDiscovery';
+import { getCurrentProvisionPlan, getHostCapabilities } from './features/env/provisionHost';
 import { TEMPLATE_REPO } from './core/templateDefaults';
 import { encodeMarker, parseMarker, parseCommitList, renderSyncPlan, markerPath } from './core/templateSync';
 import { FcppMetadata, FcppProject, ParsedIssue } from './types';
@@ -633,6 +634,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.getChipState', () => lastChip),
     vscode.commands.registerCommand('het.getConanRuntime', async () => ensureConanRuntime()),
     vscode.commands.registerCommand('het.getEnvRows', async () => ensureToolDiscovery()),
+    vscode.commands.registerCommand('het.getHostCapabilities', async (force?: boolean) => getHostCapabilities(!!force)),
+    vscode.commands.registerCommand('het.getProvisionPlan', async (force?: boolean) => getCurrentProvisionPlan(!!force)),
     vscode.commands.registerCommand('het.refresh', () => refreshStatus()),
     vscode.commands.registerCommand('het.build', () => { track('build'); return buildProject(); }),
     vscode.commands.registerCommand('het.dashboard', (section?: string) => openDashboard(context, section)),
