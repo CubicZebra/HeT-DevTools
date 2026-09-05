@@ -54,6 +54,7 @@ import { getCurrentProvisionPlan, getHostCapabilities } from './features/env/pro
 import { providerLabel } from './core/provisionPlan';
 import { currentManagedStatus, managedPrepare, managedRemove } from './features/env/managedProvisioner';
 import { getWslLaneStatus } from './features/env/wslProbe';
+import { getMacosLaneStatus } from './features/env/macosProbe';
 import { openHudPanel } from './features/hud/panel';
 import { HudEnvRow, HudModel, defaultHudActions, hudEnabled } from './features/hud/hudModel';
 import { TEMPLATE_REPO } from './core/templateDefaults';
@@ -380,6 +381,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         process.platform === 'win32' && plan?.provider === 'win-wsl2'
           ? ((await getWslLaneStatus(false).catch(() => null)) as { distro?: string; ready: boolean; tools: Record<string, string>; note?: string } | null)
           : null,
+      osx:
+        process.platform === 'darwin' && plan?.provider === 'macos-native'
+          ? ((await getMacosLaneStatus(false).catch(() => null)) as { clt: boolean; clangVersion?: string; python?: string; note?: string } | null)
+          : null,
     };
   });
   setCockpitPageProvider('buildTest', async () => ({
@@ -689,6 +694,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.getHostCapabilities', async (force?: boolean) => getHostCapabilities(!!force)),
     vscode.commands.registerCommand('het.getProvisionPlan', async (force?: boolean) => getCurrentProvisionPlan(!!force)),
     vscode.commands.registerCommand('het.getWslLane', async (force?: boolean) => getWslLaneStatus(!!force)),
+    vscode.commands.registerCommand('het.getMacosLane', async (force?: boolean) => getMacosLaneStatus(!!force)),
     vscode.commands.registerCommand('het.envStatus', () => {
       const ctx = contextRef;
       return ctx ? currentManagedStatus(ctx.globalStorageUri.fsPath, process.platform === 'win32') : { state: 'absent' as const, tools: {} };

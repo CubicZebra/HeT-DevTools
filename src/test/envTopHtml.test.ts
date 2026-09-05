@@ -1,5 +1,5 @@
 import * as assert from 'node:assert';
-import { envTopHtml, envWslHtml } from '../features/cockpit/webview/render';
+import { envOsxHtml, envTopHtml, envWslHtml } from '../features/cockpit/webview/render';
 
 describe('V4-5 envTopHtml (dashboard env & managed block)', () => {
   it('renders nothing when both plan and managed are absent', () => {
@@ -70,5 +70,27 @@ describe('V4-3 envWslHtml (WSL2 lane block)', () => {
     assert.ok(html.includes('!'));
     assert.ok(html.includes('未就绪'));
     assert.ok(html.includes('WSL2 车道'));
+  });
+});
+
+describe('V4-4 envOsxHtml (macOS lane block)', () => {
+  it('renders nothing when the lane is absent', () => {
+    assert.strictEqual(envOsxHtml(null), '');
+    assert.strictEqual(envOsxHtml(undefined), '');
+  });
+
+  it('ready lane: check mark + Apple clang version + python + note', () => {
+    const html = envOsxHtml({ clt: true, clangVersion: '16.0.0', python: 'Python 3.12.3', note: 'Apple clang 16.0.0 · …' });
+    assert.ok(html.includes('✓'));
+    assert.ok(html.includes('macOS 车道'));
+    assert.ok(html.includes('Apple clang 16.0.0'));
+    assert.ok(html.includes('Python 3.12.3'));
+  });
+
+  it('missing CLT shows warning + actionable copy', () => {
+    const html = envOsxHtml({ clt: false, note: '未检测到 Xcode Command Line Tools（需 xcode-select --install 一次）。' });
+    assert.ok(html.includes('!'));
+    assert.ok(html.includes('未检测到 Command Line Tools'));
+    assert.ok(html.includes('xcode-select --install'));
   });
 });

@@ -55,6 +55,8 @@ export interface OverviewPayload {
   managed?: ManagedView | null;
   /** V4-3 WSL2 lane status (win32 + win-wsl2 plan). */
   wsl?: WslView | null;
+  /** V4-4 macOS lane status (darwin + macos-native plan). */
+  osx?: OsxView | null;
 }
 
 export interface BuildTestPayload {
@@ -172,6 +174,13 @@ export interface WslView {
   note?: string;
 }
 
+export interface OsxView {
+  clt: boolean;
+  clangVersion?: string;
+  python?: string;
+  note?: string;
+}
+
 const MANAGED_STATE_ZH: Record<ManagedView['state'], string> = {
   absent: '未准备（点「准备」即可离线自给 conan/cmake/ninja）',
   provisioning: '准备中…',
@@ -235,6 +244,25 @@ export function envWslHtml(wsl?: WslView | null): string {
   return `<div class="env">${parts.join('')}</div>`;
 }
 
+/** V4-4: macOS lane status block (darwin + macos-native plan). */
+export function envOsxHtml(osx?: OsxView | null): string {
+  if (!osx) {
+    return '';
+  }
+  const mark = osx.clt && osx.clangVersion ? '✓' : '!';
+  const parts: string[] = [
+    `<div class="drow"><span class="dk">${mark} macOS 车道（Xcode CLT）</span>` +
+      `<span class="dv dim">${osx.clangVersion ? `Apple clang ${esc(osx.clangVersion)}` : osx.clt ? 'CLT 已装（clang 版本未知）' : '未检测到 Command Line Tools'}</span></div>`,
+  ];
+  if (osx.python) {
+    parts.push(`<div class="drow dim"><span class="dk">python</span><span class="dv dim">${esc(osx.python)}</span></div>`);
+  }
+  if (osx.note) {
+    parts.push(`<div class="drow dim"><span class="dk">说明</span><span class="dv dim">${esc(osx.note)}</span></div>`);
+  }
+  return `<div class="env">${parts.join('')}</div>`;
+}
+
 function overviewContent(p: OverviewPayload): string {
   const health = p.healthScore === undefined ? '' : `<span class="chip ${p.healthScore >= 80 ? 'ok' : p.healthScore >= 50 ? 'warn' : 'fail'}">健康分 ${p.healthScore}</span>`;
   const tools = p.tools.map((t) => `<span class="status">${t.ok ? '✓' : '✗'} ${esc(t.name)}</span>`).join(' ');
@@ -254,6 +282,7 @@ function overviewContent(p: OverviewPayload): string {
     ${runtime}
     ${envTopHtml(p.plan ?? null, p.managed ?? null)}
     ${envWslHtml(p.wsl ?? null)}
+    ${envOsxHtml(p.osx ?? null)}
     ${envBlockHtml(p.envRows ?? [])}
     <div class="row">${tools}</div>
     <div class="actions">
