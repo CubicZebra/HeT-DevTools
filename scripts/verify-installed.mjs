@@ -157,6 +157,13 @@ if (want('proj')) {
   await runPhase('proj');
 }
 
+// V4-7: four VIRTUAL hosts (win-noWSL / win-WSL2 / linux / macos) simulated in
+// one host via HET_FAKE_HOST — Provider selection must be deterministic.
+if (want('matrix')) {
+  process.env.HET_VERIFY_PHASE = 'matrix';
+  await runPhase('matrix');
+}
+
 // 3) scrub phase: a plain PowerShell PATH (no conda anywhere) — the extension
 //    must sniff the conda env by itself and run a real `conan create`.
 if (want('scrub')) {
