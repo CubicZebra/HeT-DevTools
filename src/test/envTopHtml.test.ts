@@ -1,5 +1,5 @@
 import * as assert from 'node:assert';
-import { envTopHtml } from '../features/cockpit/webview/render';
+import { envTopHtml, envWslHtml } from '../features/cockpit/webview/render';
 
 describe('V4-5 envTopHtml (dashboard env & managed block)', () => {
   it('renders nothing when both plan and managed are absent', () => {
@@ -47,5 +47,28 @@ describe('V4-5 envTopHtml (dashboard env & managed block)', () => {
     assert.ok(!html.includes('<script>'), 'script tag must be escaped');
     assert.ok(html.includes('&lt;script&gt;'), 'label escaped to entities');
     assert.ok(html.includes('&quot;&gt;&amp;'), 'note escaped to entities');
+  });
+});
+
+describe('V4-3 envWslHtml (WSL2 lane block)', () => {
+  it('renders nothing when the lane is absent', () => {
+    assert.strictEqual(envWslHtml(null), '');
+    assert.strictEqual(envWslHtml(undefined), '');
+  });
+
+  it('ready lane: check mark + distro + tools', () => {
+    const html = envWslHtml({ distro: 'Ubuntu-24.04', ready: true, tools: { gcc: '13.3.0', lcov: '2.0' }, note: '复用现有发行版' });
+    assert.ok(html.includes('✓'));
+    assert.ok(html.includes('WSL2 车道'));
+    assert.ok(html.includes('Ubuntu-24.04'));
+    assert.ok(html.includes('gcc 13.3.0'));
+    assert.ok(html.includes('复用现有发行版'));
+  });
+
+  it('unready lane shows a warning mark and honest copy', () => {
+    const html = envWslHtml({ ready: false, tools: {} });
+    assert.ok(html.includes('!'));
+    assert.ok(html.includes('未就绪'));
+    assert.ok(html.includes('WSL2 车道'));
   });
 });

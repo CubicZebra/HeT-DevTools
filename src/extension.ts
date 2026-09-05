@@ -53,6 +53,7 @@ import { discoverTools, TOOL_DEFS, ToolRow } from './core/toolchainDiscovery';
 import { getCurrentProvisionPlan, getHostCapabilities } from './features/env/provisionHost';
 import { providerLabel } from './core/provisionPlan';
 import { currentManagedStatus, managedPrepare, managedRemove } from './features/env/managedProvisioner';
+import { getWslLaneStatus } from './features/env/wslProbe';
 import { openHudPanel } from './features/hud/panel';
 import { HudEnvRow, HudModel, defaultHudActions, hudEnabled } from './features/hud/hudModel';
 import { TEMPLATE_REPO } from './core/templateDefaults';
@@ -375,6 +376,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       envRows,
       plan: plan ? { label: providerLabel(plan.provider), coverage: plan.coverage, reason: plan.reason } : null,
       managed: managed && managed.state !== 'absent' ? managed : null,
+      wsl:
+        process.platform === 'win32' && plan?.provider === 'win-wsl2'
+          ? ((await getWslLaneStatus(false).catch(() => null)) as { distro?: string; ready: boolean; tools: Record<string, string>; note?: string } | null)
+          : null,
     };
   });
   setCockpitPageProvider('buildTest', async () => ({
@@ -683,6 +688,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.getEnvRows', async () => ensureToolDiscovery()),
     vscode.commands.registerCommand('het.getHostCapabilities', async (force?: boolean) => getHostCapabilities(!!force)),
     vscode.commands.registerCommand('het.getProvisionPlan', async (force?: boolean) => getCurrentProvisionPlan(!!force)),
+    vscode.commands.registerCommand('het.getWslLane', async (force?: boolean) => getWslLaneStatus(!!force)),
     vscode.commands.registerCommand('het.envStatus', () => {
       const ctx = contextRef;
       return ctx ? currentManagedStatus(ctx.globalStorageUri.fsPath, process.platform === 'win32') : { state: 'absent' as const, tools: {} };

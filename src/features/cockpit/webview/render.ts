@@ -53,6 +53,8 @@ export interface OverviewPayload {
   plan?: PlanView | null;
   /** V4-2/V4-5 managed environment state (globalStorage). */
   managed?: ManagedView | null;
+  /** V4-3 WSL2 lane status (win32 + win-wsl2 plan). */
+  wsl?: WslView | null;
 }
 
 export interface BuildTestPayload {
@@ -163,6 +165,13 @@ export interface ManagedView {
   note?: string;
 }
 
+export interface WslView {
+  distro?: string;
+  ready: boolean;
+  tools: Record<string, string>;
+  note?: string;
+}
+
 const MANAGED_STATE_ZH: Record<ManagedView['state'], string> = {
   absent: '未准备（点「准备」即可离线自给 conan/cmake/ninja）',
   provisioning: '准备中…',
@@ -204,6 +213,28 @@ export function envTopHtml(plan?: PlanView | null, managed?: ManagedView | null)
   return `<div class="env">${parts.join('')}</div>`;
 }
 
+/** V4-3: WSL2 lane status block (win32 + win-wsl2 plan). */
+export function envWslHtml(wsl?: WslView | null): string {
+  if (!wsl) {
+    return '';
+  }
+  const mark = wsl.ready ? '✓' : '!';
+  const tools = Object.entries(wsl.tools)
+    .map(([k, v]) => `${k} ${v}`)
+    .join(' · ');
+  const parts: string[] = [
+    `<div class="drow"><span class="dk">${mark} WSL2 车道${wsl.distro ? ` · ${esc(wsl.distro)}` : ''}</span>` +
+      `<span class="dv dim">${wsl.ready ? '就绪（gcc 系统级 · 覆盖率全语义）' : '发行版存在但 gcc 未就绪'}</span></div>`,
+  ];
+  if (tools) {
+    parts.push(`<div class="drow dim"><span class="dk">工具</span><span class="dv dim">${esc(tools)}</span></div>`);
+  }
+  if (wsl.note) {
+    parts.push(`<div class="drow dim"><span class="dk">说明</span><span class="dv dim">${esc(wsl.note)}</span></div>`);
+  }
+  return `<div class="env">${parts.join('')}</div>`;
+}
+
 function overviewContent(p: OverviewPayload): string {
   const health = p.healthScore === undefined ? '' : `<span class="chip ${p.healthScore >= 80 ? 'ok' : p.healthScore >= 50 ? 'warn' : 'fail'}">健康分 ${p.healthScore}</span>`;
   const tools = p.tools.map((t) => `<span class="status">${t.ok ? '✓' : '✗'} ${esc(t.name)}</span>`).join(' ');
@@ -222,6 +253,7 @@ function overviewContent(p: OverviewPayload): string {
     </div>
     ${runtime}
     ${envTopHtml(p.plan ?? null, p.managed ?? null)}
+    ${envWslHtml(p.wsl ?? null)}
     ${envBlockHtml(p.envRows ?? [])}
     <div class="row">${tools}</div>
     <div class="actions">
