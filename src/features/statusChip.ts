@@ -67,43 +67,44 @@ export function chipSpec(m: ChipModel): ChipSpec | null {
   const buildIcon = m.lastBuildOk === null ? '$(circle-outline)' : m.lastBuildOk ? '$(pass)' : '$(error)';
   const buildTxt = m.lastBuildOk === null ? '未运行' : m.lastBuildOk ? '成功' : '失败';
   const testIcon = m.test ? (m.test.failed > 0 ? '$(error)' : '$(pass)') : '$(circle-outline)';
-  const testTxt = m.test
-    ? `${m.test.passed}/${m.test.passed + m.test.failed + m.test.skipped} 通过 · 失败 ${m.test.failed} · 跳过 ${m.test.skipped}`
-    : '未运行';
   const tplTxt = m.templateBehind > 0 ? `可更新 ${m.templateBehind} 个提交` : '与参考一致';
 
-  // ---- badges row (compact status strip) ----
+  // ---- compact status strip (codicons only, no emoji pile) ----
   const badges = [
     `${healthIcon} 健康 ${healthTxt}`,
     `${buildIcon} 构建 ${buildTxt}`,
     `${testIcon} 测试 ${m.test ? `${m.test.passed}/${m.test.passed + m.test.failed + m.test.skipped}` : '—'}`,
   ].join('   ');
 
-  // ---- data rows (fcpp-native gitmoji semantics) ----
-  const rows: string[] = [];
-  const buildAgo = m.buildAgo ? ` · ${m.buildAgo}` : '';
-  const buildType = m.buildType ? ` · ${m.buildType}` : '';
-  rows.push(`${G_BUILD} 构建  ·  ${m.lastBuildOk === null ? '未运行' : m.lastBuildOk ? '成功' : '失败'}${buildType}${buildAgo}`);
-  rows.push(`${G_TEST} 测试  ·  ${testTxt}`);
+  // ---- two-column table: label glyph + value (markdown-native, engineered) ----
+  const rows: { k: string; v: string }[] = [];
+  const buildAgo = m.lastBuildOk === null || !m.buildAgo ? '' : ` · ${m.buildAgo}`;
+  const buildType = m.lastBuildOk === null || !m.buildType ? '' : ` · ${m.buildType}`;
+  rows.push({ k: `${G_BUILD} 构建`, v: `${m.lastBuildOk === null ? '未运行' : m.lastBuildOk ? '成功' : '失败'}${buildType}${buildAgo}`.trim() });
+  rows.push({ k: `${G_TEST} 测试`, v: m.test ? `通过 ${m.test.passed} · 失败 ${m.test.failed} · 跳过 ${m.test.skipped}` : '未运行' });
   if (m.coverage !== null && m.coverage !== undefined) {
-    rows.push(`📊 覆盖率  ·  ${m.coverage}%（gcov/lcov）`);
+    rows.push({ k: '📊 覆盖率', v: `${m.coverage}%` });
   }
   const runtime = m.runtimeDetail && m.runtimeDetail.length > 0 ? m.runtimeDetail : m.conanEnv ?? '未找到（构建暂不可用）';
-  rows.push(`$(gear) 运行时  ·  ${runtime}`);
-  rows.push(`${G_DOCS} 模板  ·  ${tplTxt}`);
-  if (m.running) {
-    rows.push(`$(sync~spin) 运行中：${m.running}`);
-  }
+  rows.push({ k: '⚙️ 运行时', v: runtime });
+  rows.push({ k: `${G_DOCS} 模板`, v: tplTxt });
+
+  const table = [
+    '| 指标 | 值 |',
+    '| --- | --- |',
+    ...rows.map((r) => `| ${r.k} | ${r.v} |`),
+  ].join('\n');
+  const runningLine = m.running ? `\n\n$(sync~spin) 运行中：${m.running}` : '';
 
   const tooltip = [
     `**$(package) HeT DevTools · ${m.projectName}**`,
     '',
     badges,
     '',
-    '---',
-    ...rows,
-    '---',
-    '$(keyboard) Enter 打开监控卡（HUD） · $(eye) 可隐藏监控 chip',
+    table,
+    runningLine,
+    '',
+    '$(keyboard) Enter 打开监控卡 · $(eye) 可隐藏监控 chip',
   ].join('\n');
 
   return {

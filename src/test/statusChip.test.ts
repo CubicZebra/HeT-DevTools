@@ -58,11 +58,12 @@ describe('statusChip (V3-1/V3-3 monitoring-only chip)', () => {
 });
 
 describe('statusChip V4-6 hover engineering (fcpp-native gitmoji rows)', () => {
-  it('uses fcpp trigger semantics: build 🏗️, tests 🍺, template 📖, env $(gear)', () => {
+  it('uses fcpp trigger semantics: build 🏗️, tests 🍺, template 📖, env ⚙️', () => {
     const s = chipSpec(projectModel({ runtimeDetail: 'conan 2.32 · conda env build（启发式推断 · 极可能）' }))!;
     assert.ok(s.tooltip.includes('🏗️ 构建'), 'build row must use :building_construction: glyph');
     assert.ok(s.tooltip.includes('🍺 测试'), 'test row must use :beer: glyph');
-    assert.ok(s.tooltip.includes('$(gear) 运行时'), 'env row uses a codicon, not a trigger emoji');
+    assert.ok(s.tooltip.includes('⚙️ 运行时'), 'env row uses a plain visual glyph, not a trigger emoji');
+    assert.ok(s.tooltip.includes('| --- |'), 'data is rendered as an aligned markdown table (no emoji pile)');
   });
   it('shows optional rich rows when the host supplies them', () => {
     const s = chipSpec(projectModel({ buildAgo: '3 分钟前', buildType: 'Debug', coverage: 87, runtimeDetail: 'conan 2.32 · conda env build' }))!;
