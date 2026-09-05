@@ -51,6 +51,9 @@ import { renderSearchQuery, renderTechDisclosure, PatentInput } from './core/pat
 import { resolveTemplateSource, resolveCloneRef } from './core/templateService';
 import { discoverTools, TOOL_DEFS, ToolRow } from './core/toolchainDiscovery';
 import { getCurrentProvisionPlan, getHostCapabilities } from './features/env/provisionHost';
+import { providerLabel } from './core/provisionPlan';
+import { openHudPanel } from './features/hud/panel';
+import { HudEnvRow, HudModel, defaultHudActions, hudEnabled } from './features/hud/hudModel';
 import { TEMPLATE_REPO } from './core/templateDefaults';
 import { encodeMarker, parseMarker, parseCommitList, renderSyncPlan, markerPath } from './core/templateSync';
 import { FcppMetadata, FcppProject, ParsedIssue } from './types';
@@ -67,13 +70,43 @@ let currentProject: FcppProject | undefined;
 let activationLine = '';
 let lastTestSummary: GTestRunSummary | undefined;
 let lastBuildOk: boolean | undefined;
+/** When the last build/test outcome was recorded (0 = never). */
+let lastBuildAt = 0;
 let lastConanOutput = '';
 let lastBenchParse: { complete: boolean; cases: [string, string][] } | null = null;
 let wizardAutoOpened = false;
 let lastHealth: { score: number; at: number } | undefined;
 let onboardingNotified = false;
 let lastChip: { text: string; tooltip: string; command?: string } | null = null;
+/** Timer id for the "hide chip for 5 minutes" snooze. */
+let chipSnoozeTimer: ReturnType<typeof setTimeout> | undefined;
 const isTestHost = process.argv.some((a) => a.includes('--extensionTestsPath'));
+
+/** Record a build/test outcome + timestamp (for the chip/HUD "…前" line). */
+function markBuildOutcome(ok: boolean): void {
+  lastBuildOk = ok;
+  lastBuildAt = Date.now();
+}
+
+/** '刚刚' / '3 分钟前' / '2 小时前' from a timestamp. */
+function agoText(at: number | undefined): string | null {
+  if (!at) {
+    return null;
+  }
+  const s = Math.max(0, Math.floor((Date.now() - at) / 1000));
+  if (s < 15) {
+    return '刚刚';
+  }
+  if (s < 60) {
+    return `${s} 秒前`;
+  }
+  const min = Math.floor(s / 60);
+  if (min < 60) {
+    return `${min} 分钟前`;
+  }
+  const h = Math.floor(min / 60);
+  return `${h} 小时前`;
+}
 
 /**
  * True inside any automation host (unit/integration mocha, the installed-vsix
@@ -1171,7 +1204,7 @@ function openCoveragePanel(context: vscode.ExtensionContext): void {
     const result = await runConanOnce(project);
     const issues = parseCompilerOutput(`${result.stdout}\n${result.stderr}`);
     mapIssues(issues, project.root);
-    lastBuildOk = result.ok;
+    markBuildOutcome(result.ok);
     reportCache = '';
     const report = await locateReport();
     if (!result.ok) {
@@ -2781,6 +2814,84 @@ async function isWorkspaceEmpty(): Promise<boolean> {
   return true;
 }
 
+/** Rich one-line runtime description for chip/HUD. */
+function conanRuntimeDetail(): string | null {
+  if (!conanRuntime) {
+    return null;
+  }
+  const ver = conanRuntime.version ? `conan ${conanRuntime.version} · ` : '';
+  if (conanRuntime.overrideUser) {
+    return `${ver}用户自定义`;
+  }
+  if (conanRuntime.envName) {
+    return `${ver}conda env ${conanRuntime.envName}（启发式推断 · 极可能）`;
+  }
+  return `${ver}PATH`;
+}
+
+function hudFontSize(): number {
+  const n = vscode.workspace.getConfiguration('het').get<number>('hud.fontSize', 13.5);
+  return typeof n === 'number' && Number.isFinite(n) ? n : 13.5;
+}
+
+/** V4-6: hide the chip for 5 minutes (Snooze), then it returns. */
+function snoozeChip(minutes = 5): void {
+  if (chipSnoozeTimer) {
+    clearTimeout(chipSnoozeTimer);
+  }
+  statusItem?.hide();
+  lastChip = null;
+  chipSnoozeTimer = setTimeout(() => {
+    chipSnoozeTimer = undefined;
+    void refreshStatus();
+  }, minutes * 60_000);
+}
+
+/** V4-6: chip click falls back to the QuickPick list instead of the HUD card. */
+function disableHud(): void {
+  void vscode.workspace.getConfiguration('het').update('hud.disableHud', true, vscode.ConfigurationTarget.Global);
+  maybeToast('info', '已改用快捷列表（可随时在设置 het.hud.disableHud 恢复 HUD）。');
+}
+
+async function assembleHudModel(): Promise<HudModel> {
+  const st = getCockpitState();
+  const plan = await getCurrentProvisionPlan(true).catch(() => null);
+  const tools = await ensureToolDiscovery().catch(() => []);
+  const env: HudEnvRow[] = [];
+  const wanted = new Set(['conan', 'cmake', 'python', 'ninja', 'gtest']);
+  for (const t of tools) {
+    if (!wanted.has(t.key)) {
+      continue;
+    }
+    const missing = t.source === 'missing';
+    const tone = missing ? (t.managed ? 'ok' : t.optional ? 'plain' : 'fail') : 'ok';
+    const value = missing
+      ? t.managed
+        ? 'conan 托管（构建时获取）'
+        : t.optional
+          ? '可选（Linux/WSL 覆盖率）'
+          : '未找到'
+      : (t.sourceDetail || t.exe || t.source).slice(0, 60);
+    env.push({ label: t.label, value, tone: tone as HudEnvRow['tone'] });
+  }
+  return {
+    title: currentProject?.metadata?.name ?? 'fcpp 项目',
+    health: lastHealth?.score ?? st.top.health,
+    running: st.top.running,
+    lastBuildOk: lastBuildOk ?? null,
+    test: lastTestSummary
+      ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped }
+      : null,
+    coverage: null,
+    buildAgo: agoText(lastBuildAt || undefined),
+    provider: plan ? { label: providerLabel(plan.provider), coverage: plan.coverage } : null,
+    runtime: conanRuntimeDetail(),
+    env,
+    actions: defaultHudActions(),
+    templateBehind: st.top.templateBehind,
+  };
+}
+
 /** Push the latest model into the single status-bar chip (hide = invisible). */
 async function refreshChip(): Promise<void> {
   if (!statusItem) {
@@ -2796,13 +2907,10 @@ async function refreshChip(): Promise<void> {
       ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped }
       : null,
     templateBehind: st.top.templateBehind,
-    conanEnv: conanRuntime
-      ? conanRuntime.overrideUser
-        ? '用户自定义'
-        : conanRuntime.envName
-          ? `conda env ${conanRuntime.envName}`
-          : 'PATH'
-      : null,
+    conanEnv: conanRuntime ? (conanRuntime.overrideUser ? '用户自定义' : conanRuntime.envName ? `conda env ${conanRuntime.envName}` : 'PATH') : null,
+    buildAgo: agoText(lastBuildAt || undefined),
+    buildType: currentProject?.metadata?.build_type ?? null,
+    runtimeDetail: conanRuntimeDetail(),
   });
   if (!spec) {
     statusItem.hide();
@@ -2817,8 +2925,27 @@ async function refreshChip(): Promise<void> {
   lastChip = { text: spec.text, tooltip: spec.tooltip, command: spec.command };
 }
 
-/** V3-3: click the chip → monitor overview QuickPick (keyboard reachable). */
+/** V4-6: click the chip → Level-2 HUD card; disabled/automation → QuickPick. */
 async function showChipOverview(): Promise<void> {
+  const disabled = !hudEnabled(vscode.workspace.getConfiguration('het').get('hud.disableHud'));
+  if (disabled || quietHost()) {
+    await showChipQuickPick();
+    return;
+  }
+  if (!contextRef) {
+    await showChipQuickPick();
+    return;
+  }
+  openHudPanel(contextRef, {
+    getModel: assembleHudModel,
+    fontSize: hudFontSize,
+    onSnooze: () => snoozeChip(5),
+    onHideHud: disableHud,
+  });
+}
+
+/** V3-3 fallback / automation: keyboard-reachable QuickPick overview. */
+async function showChipQuickPick(): Promise<void> {
   const st = getCockpitState();
   const health = lastHealth?.score ?? st.top.health;
   const buildState = lastBuildOk === null ? '未运行' : lastBuildOk ? '成功' : '失败';
@@ -3032,7 +3159,7 @@ async function buildProject(): Promise<void> {
   const issues = parseCompilerOutput(`${result.stdout}\n${result.stderr}`);
   mapIssues(issues, project.root);
   log(`[build] finished ok=${result.ok} issues=${issues.length}`);
-  lastBuildOk = result.ok;
+  markBuildOutcome(result.ok);
   emitCockpitEvent({ type: 'issue:summary', count: issues.length });
 
   if (result.ok) {
@@ -3069,7 +3196,7 @@ async function executeTestRun(): Promise<{ ok: boolean; stdout: string; stderr: 
   const issues = parseCompilerOutput(fullOutput);
   mapIssues(issues, project.root);
 
-  lastBuildOk = result.ok;
+  markBuildOutcome(result.ok);
   lastTestSummary = parseGTestOutput(fullOutput);
   emitCockpitEvent({ type: 'issue:summary', count: issues.length });
   log(

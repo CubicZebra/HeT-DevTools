@@ -1,10 +1,11 @@
 /**
- * HeT status-bar chip (GUI rework v3 — V3-1/V3-3).
+ * HeT status-bar chip (GUI rework v3 — V3-1/V3-3; V4-6 hover engineering).
  *
  * PURE monitoring surface — it never offers "new project". The chip appears
  * ONLY when an fcpp project is detected (invisible otherwise), sits bottom-
- * right (host places it beside the notification bell), shows a theme-icon
- * tooltip on hover, and opens a QuickPick overview on click.
+ * right (host places it beside the notification bell).
+ * V4-6: the hover is an engineered Markdown overview (codicons + fcpp-native
+ * gitmoji semantics); clicking opens the Level-2 HUD card (host decides).
  * PURE module — no VS Code imports (unit-testable).
  */
 
@@ -24,17 +25,33 @@ export interface ChipModel {
   templateBehind: number;
   /** Sniffed conan runtime description (e.g. 'conda env build' / 'PATH' / null). */
   conanEnv: string | null;
+  /** V4-6 rich rows (optional — absent rows are omitted). */
+  buildAgo?: string | null;
+  buildType?: string | null;
+  coverage?: number | null;
+  /** e.g. 'conan 2.32 · conda env build · 启发式推断·极可能' */
+  runtimeDetail?: string | null;
 }
 
 export interface ChipSpec {
   text: string;
   /** Markdown with `$(codicon)` theme icons (host wraps in MarkdownString). */
   tooltip: string;
-  /** Command run on click (monitor overview QuickPick). */
+  /** Command run on click (V4-6: opens the HUD card / falls back to QuickPick). */
   command?: string;
   /** VS Code ThemeColor id, e.g. statusBarItem.errorBackground. */
   color?: string;
 }
+
+/**
+ * V4-6 gitmoji semantics (visual parity with the fcpp trigger table):
+ *  build 🏗️ · tests 🍺 · docs/template 📖 · release 📦 · security 🛡️ · board 🔥.
+ *  Pure-visual rows keep codicons ($(gear) env, 📊 coverage) so trigger emoji
+ *  never collide with non-CI meaning.
+ */
+const G_BUILD = '🏗️';
+const G_TEST = '🍺';
+const G_DOCS = '📖';
 
 /** Render the chip only while a project is open — monitoring only. */
 export function chipSpec(m: ChipModel): ChipSpec | null {
@@ -44,28 +61,54 @@ export function chipSpec(m: ChipModel): ChipSpec | null {
   const run = m.running ? '$(sync~spin)' : '$(pulse)';
   const score = m.health === null ? '·' : String(m.health);
   const text = `${run} HeT ${score}`;
+
   const healthIcon = m.health === null ? '$(question)' : m.health >= 80 ? '$(smiley)' : m.health >= 50 ? '$(warning)' : '$(error)';
+  const healthTxt = m.health === null ? '未体检' : `${m.health}/100`;
   const buildIcon = m.lastBuildOk === null ? '$(circle-outline)' : m.lastBuildOk ? '$(pass)' : '$(error)';
+  const buildTxt = m.lastBuildOk === null ? '未运行' : m.lastBuildOk ? '成功' : '失败';
   const testIcon = m.test ? (m.test.failed > 0 ? '$(error)' : '$(pass)') : '$(circle-outline)';
-  const tplIcon = m.templateBehind > 0 ? '$(sync~spin)' : '$(check)';
-  const conanIcon = m.conanEnv ? '$(check)' : '$(error)';
-  const runningLine = m.running ? `\n- $(sync~spin) 运行中：${m.running}` : '';
-  const lines = [
-    `**$(package) HeT DevTools — ${m.projectName}**`,
-    `- ${healthIcon} 健康分 ${m.health === null ? '未体检' : `${m.health}/100`}`,
-    `- ${buildIcon} 最近构建 ${m.lastBuildOk === null ? '未运行' : m.lastBuildOk ? '成功' : '失败'}`,
-    m.test
-      ? `- ${testIcon} 测试 ${m.test.passed}/${m.test.passed + m.test.failed + m.test.skipped} 通过 · 失败 ${m.test.failed} · 跳过 ${m.test.skipped}`
-      : '- $(circle-outline) 测试 未运行',
-    `- ${tplIcon} ${m.templateBehind > 0 ? `模板可更新 ${m.templateBehind} 个提交` : '模板与参考一致'}`,
-    `- ${conanIcon} conan ${m.conanEnv ?? '未找到（构建暂不可用）'}`,
-    runningLine,
+  const testTxt = m.test
+    ? `${m.test.passed}/${m.test.passed + m.test.failed + m.test.skipped} 通过 · 失败 ${m.test.failed} · 跳过 ${m.test.skipped}`
+    : '未运行';
+  const tplTxt = m.templateBehind > 0 ? `可更新 ${m.templateBehind} 个提交` : '与参考一致';
+
+  // ---- badges row (compact status strip) ----
+  const badges = [
+    `${healthIcon} 健康 ${healthTxt}`,
+    `${buildIcon} 构建 ${buildTxt}`,
+    `${testIcon} 测试 ${m.test ? `${m.test.passed}/${m.test.passed + m.test.failed + m.test.skipped}` : '—'}`,
+  ].join('   ');
+
+  // ---- data rows (fcpp-native gitmoji semantics) ----
+  const rows: string[] = [];
+  const buildAgo = m.buildAgo ? ` · ${m.buildAgo}` : '';
+  const buildType = m.buildType ? ` · ${m.buildType}` : '';
+  rows.push(`${G_BUILD} 构建  ·  ${m.lastBuildOk === null ? '未运行' : m.lastBuildOk ? '成功' : '失败'}${buildType}${buildAgo}`);
+  rows.push(`${G_TEST} 测试  ·  ${testTxt}`);
+  if (m.coverage !== null && m.coverage !== undefined) {
+    rows.push(`📊 覆盖率  ·  ${m.coverage}%（gcov/lcov）`);
+  }
+  const runtime = m.runtimeDetail && m.runtimeDetail.length > 0 ? m.runtimeDetail : m.conanEnv ?? '未找到（构建暂不可用）';
+  rows.push(`$(gear) 运行时  ·  ${runtime}`);
+  rows.push(`${G_DOCS} 模板  ·  ${tplTxt}`);
+  if (m.running) {
+    rows.push(`$(sync~spin) 运行中：${m.running}`);
+  }
+
+  const tooltip = [
+    `**$(package) HeT DevTools · ${m.projectName}**`,
     '',
-    '点击 chip 打开监控概况（键盘可直达各分区）',
-  ].filter((l) => l.length > 0);
+    badges,
+    '',
+    '---',
+    ...rows,
+    '---',
+    '$(keyboard) Enter 打开监控卡（HUD） · $(eye) 可隐藏监控 chip',
+  ].join('\n');
+
   return {
     text,
-    tooltip: lines.join('\n'),
+    tooltip,
     command: 'het.chipOverview',
     color: m.lastBuildOk === false ? 'statusBarItem.errorBackground' : undefined,
   };
