@@ -52,7 +52,7 @@ import { resolveTemplateSource, resolveCloneRef } from './core/templateService';
 import { discoverTools, TOOL_DEFS, ToolRow } from './core/toolchainDiscovery';
 import { getCurrentProvisionPlan, getHostCapabilities } from './features/env/provisionHost';
 import { providerLabel, ProvisionPrefs } from './core/provisionPlan';
-import { currentManagedStatus, managedPrepare, managedRemove } from './features/env/managedProvisioner';
+import { currentManagedStatus, managedGc, managedPrepare, managedRemove } from './features/env/managedProvisioner';
 import { getWslLaneStatus } from './features/env/wslProbe';
 import { getMacosLaneStatus } from './features/env/macosProbe';
 import { openHudPanel } from './features/hud/panel';
@@ -347,6 +347,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   log(activationLine);
   contextRef = context;
   track('activation');
+
+  // V4-8: once per activation, GC pure leftovers in managed storage (keeps any
+  // retryable tree; the real uninstall-clean is VS Code deleting globalStorage).
+  void managedGc(context.globalStorageUri.fsPath);
 
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   context.subscriptions.push(statusItem);
@@ -698,6 +702,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.envStatus', () => {
       const ctx = contextRef;
       return ctx ? currentManagedStatus(ctx.globalStorageUri.fsPath, process.platform === 'win32') : { state: 'absent' as const, tools: {} };
+    }),
+    vscode.commands.registerCommand('het.envGc', () => {
+      const ctx = contextRef;
+      return ctx ? managedGc(ctx.globalStorageUri.fsPath) : { state: 'absent' as const, tools: {} };
     }),
     vscode.commands.registerCommand('het.envPrepare', async () => {
       const ctx = contextRef;
@@ -2657,6 +2665,11 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
   if (process.platform === 'win32' && metadataPatch.activate_code_coverage === undefined) {
     metadataPatch.activate_code_coverage = false;
     coverageNote = '\n（已默认关闭代码覆盖率：Windows/MSVC 不支持 --coverage，可在 metadata.json 手动开启）';
+  }
+  // V4-8: new projects default to the extension-managed toolchain semantic
+  // (deterministic & uninstall-clean); system is an explicit opt-in.
+  if (metadataPatch.toolchain === undefined) {
+    metadataPatch.toolchain = 'managed';
   }
   const applied = await applyMetadataPatch(dest, metadataPatch, { persist: true });
   if (!applied.ok) {

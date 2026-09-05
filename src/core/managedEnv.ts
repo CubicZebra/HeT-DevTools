@@ -8,7 +8,7 @@
  *
  * Pure module (node:fs sync ok) — unit-testable with temp dirs.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export type ManagedState = 'absent' | 'provisioning' | 'ready' | 'error';
@@ -141,3 +141,41 @@ export function requiredReadyFiles(layout: ManagedLayout, isWin: boolean): strin
     venvTool(layout, isWin, 'ninja'),
   ];
 }
+
+export interface GcDecision {
+  action: 'keep' | 'remove';
+  reason?: string;
+}
+
+/**
+ * V4-8 activation GC — decide whether leftover managed state should be removed.
+ * Never auto-deletes a partially-provisioned tree (retry may reuse it); it only
+ * removes pure leftovers (a marker/log/conan cache with NO venv attempt) so a
+ * fully-wiped or abandoned storage does not leave cruft. The heavy "uninstall
+ * clean" is VS Code deleting globalStorage itself.
+ */
+export function gcManagedEnv(layout: ManagedLayout): GcDecision {
+  if (!existsSync(layout.envRoot)) {
+    return { action: 'keep', reason: '无托管目录' };
+  }
+  const marker = readMarker(layout);
+  // An in-progress/ready tree with a tools attempt must be kept (retry/resume).
+  if (existsSync(layout.toolsDir) && readdirSyncSafe(layout.toolsDir).length > 0) {
+    return { action: 'keep', reason: marker?.state ?? 'unknown' };
+  }
+  if (marker) {
+    return { action: 'keep', reason: `marker=${marker.state}` };
+  }
+  // No marker, no tools → only stray files (e.g. a half-written marker/log).
+  return { action: 'remove', reason: '无 marker 且无工具目录的残留' };
+}
+
+/** readdir that never throws (empty array on error). */
+function readdirSyncSafe(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+

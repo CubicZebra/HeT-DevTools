@@ -18,6 +18,7 @@ import {
   ManagedMarker,
   ManagedState,
   envWithManaged,
+  gcManagedEnv,
   managedLayout,
   readMarker,
   removeManagedEnv,
@@ -171,4 +172,14 @@ export function managedRemove(storageRoot: string): { ok: boolean; message: stri
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/** V4-8: run activation GC — remove pure leftovers, keep retryable trees. */
+export function managedGc(storageRoot: string): ManagedStatus {
+  const layout = managedLayout(storageRoot);
+  const d = gcManagedEnv(layout);
+  if (d.action === 'remove') {
+    removeManagedEnv(layout);
+  }
+  return currentManagedStatus(storageRoot, process.platform === 'win32');
 }
