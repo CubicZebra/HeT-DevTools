@@ -40,6 +40,38 @@ export interface HealthReport {
   checks: HealthCheckItem[];
 }
 
+/** V5-2: plain-language verdict for the hover "工程健康" row. */
+export function verdictZh(verdict: HealthReport['verdict']): string {
+  return verdict === 'PASS' ? '良好' : verdict === 'WARN' ? '需改进' : '不达标';
+}
+
+const GAP_LABELS: Record<string, string> = {
+  'env.conan': 'conan 未就绪',
+  'env.git': 'git 缺失',
+  'meta.parsed': 'metadata 解析失败',
+  'meta.core': '核心字段缺失',
+  'deps.buckets': '依赖桶不完整',
+  'switches.ci': 'CI 开关全关',
+  'tests.present': '测试未配置',
+  'coverage.enabled': '覆盖率未开',
+  'docs.enabled': '文档未配置',
+  'quality.config': '质量门禁缺失',
+  'state.build': '构建未验证',
+  'state.tests': '测试未跑',
+};
+
+/**
+ * V5-2: the ≤3 "可提升" short labels for the hover row — non-ok checks sorted
+ * fail-first (then warn), weight descending, then mapped to plain wording.
+ */
+export function healthGapLabels(report: Pick<HealthReport, 'checks'>): string[] {
+  const rank = (k: HealthCheckItem['kind']): number => (k === 'fail' ? 0 : k === 'warn' ? 1 : 2);
+  const nonOk = report.checks
+    .filter((c) => c.kind !== 'ok')
+    .sort((a, b) => rank(a.kind) - rank(b.kind) || b.weight - a.weight);
+  return nonOk.slice(0, 3).map((c) => GAP_LABELS[c.id] ?? c.title);
+}
+
 interface RuleResult {
   ok: boolean;
   required?: boolean;

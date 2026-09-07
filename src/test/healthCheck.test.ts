@@ -1,5 +1,5 @@
 import * as assert from 'node:assert';
-import { runHealthCheck } from '../core/healthCheck';
+import { healthGapLabels, runHealthCheck, verdictZh } from '../core/healthCheck';
 import { FcppMetadata, FcppProject, ToolStatus } from '../types';
 
 function meta(overrides: Partial<FcppMetadata> = {}): FcppMetadata {
@@ -85,5 +85,24 @@ describe('healthCheck', () => {
     const report = await runHealthCheck({ project: project(meta()) });
     const sum = report.checks.reduce((a, c) => a + c.weight, 0);
     assert.strictEqual(sum, 100);
+  });
+
+  it('verdictZh and healthGapLabels drive the hover 工程健康 row (V5-2)', async () => {
+    assert.strictEqual(verdictZh('PASS'), '良好');
+    assert.strictEqual(verdictZh('WARN'), '需改进');
+    assert.strictEqual(verdictZh('FAIL'), '不达标');
+    const weak = await runHealthCheck({ project: project(meta({ activate_code_coverage: false })), tools: {}, state: {} });
+    const gaps = healthGapLabels(weak);
+    assert.ok(Array.isArray(gaps) && gaps.length <= 3);
+    assert.ok(gaps.includes('conan 未就绪'), `gaps carry plain labels: ${gaps.join(',')}`);
+    assert.ok(gaps.includes('构建未验证') || gaps.includes('git 缺失'), `top-3 fail/warn gaps: ${gaps.join(',')}`);
+    const strong = await runHealthCheck({
+      project: project(meta()),
+      tools: { conan: tool('conan'), git: tool('git') },
+      state: { lastBuildOk: true, lastTestsOk: true },
+    });
+    const strongGaps = healthGapLabels(strong);
+    assert.ok(!strongGaps.includes('conan 未就绪'), `required tool gaps gone in strong project: ${strongGaps.join(',')}`);
+    assert.ok(!strongGaps.includes('覆盖率未开'));
   });
 });

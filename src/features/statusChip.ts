@@ -1,12 +1,15 @@
 /**
- * HeT status-bar chip (GUI rework v3 — V3-1/V3-3; V4-6 hover engineering).
+ * HeT status-bar chip (GUI rework — V5-2 "hover console").
  *
- * PURE monitoring surface — it never offers "new project". The chip appears
- * ONLY when an fcpp project is detected (invisible otherwise), sits bottom-
- * right (host places it beside the notification bell).
- * V4-6: the hover is an engineered Markdown overview (codicons + fcpp-native
- * gitmoji semantics); clicking opens the Level-2 HUD card (host decides).
- * PURE module — no VS Code imports (unit-testable).
+ * PURE module (no VS Code imports). The chip appears ONLY while an fcpp
+ * project is open. V5-2 turns the hover into an interactive "small console":
+ * a 项目/状态 table whose rows carry `command:` links (Copilot-style: hover
+ * persists, click executes, the host refreshes the model afterwards).
+ * Clicking the chip itself still opens the Level-2 HUD.
+ *
+ * Row order & labels are locked by the V5 plan (all four chars, health last):
+ *   🔧 开发环境 · 🏗️ 构建结果 · 🍺 测试中心 · 📚 技术文档 · 📊 代码覆盖
+ *   · 📖 模板同步 · 💚 工程健康 (total row, LAST)
  */
 
 export interface ChipTest {
@@ -14,6 +17,8 @@ export interface ChipTest {
   failed: number;
   skipped: number;
 }
+
+export type DocsRowState = 'none' | 'running' | 'ok' | 'fail';
 
 export interface ChipModel {
   /** '' when no fcpp project is open. */
@@ -23,42 +28,123 @@ export interface ChipModel {
   lastBuildOk: boolean | null;
   test: ChipTest | null;
   templateBehind: number;
-  /** Sniffed conan runtime description (e.g. 'conda env build' / 'PATH' / null). */
+  /** Sniffed conan runtime description (legacy; superseded by envSummary). */
   conanEnv: string | null;
-  /** V4-6 rich rows (optional — absent rows are omitted). */
+  /** V4-6 rich rows (optional). */
   buildAgo?: string | null;
   buildType?: string | null;
   coverage?: number | null;
-  /** e.g. 'conan 2.32 · conda env build · 启发式推断·极可能' */
   runtimeDetail?: string | null;
+  /** V5-2: 开发环境 row — single env sample line (envSample.summary). */
+  envSummary?: string | null;
+  /** V5-2: 技术文档 row outcome. */
+  docs?: DocsRowState | null;
+  docsDoxygen?: boolean;
+  docsSphinx?: boolean;
+  /** V5-2: 代码覆盖 row — metadata switch state. */
+  coverageEnabled?: boolean | null;
+  /** V5-2: 💚 工程健康 row (score + verdict + ≤3 short gaps). */
+  healthVerdict?: string | null;
+  healthGaps?: string[] | null;
 }
 
 export interface ChipSpec {
   text: string;
-  /** Markdown with `$(codicon)` theme icons (host wraps in MarkdownString). */
+  /** Markdown with `$(codicon)` + `command:` links (host wraps & trusts). */
   tooltip: string;
-  /** Command run on click (V4-6: opens the HUD card / falls back to QuickPick). */
   command?: string;
-  /** VS Code ThemeColor id, e.g. statusBarItem.errorBackground. */
   color?: string;
 }
 
-/**
- * V4-6 gitmoji semantics (visual parity with the fcpp trigger table):
- *  build 🏗️ · tests 🍺 · docs/template 📖 · release 📦 · security 🛡️ · board 🔥.
- *  Pure-visual rows keep codicons ($(gear) env, 📊 coverage) so trigger emoji
- *  never collide with non-CI meaning.
- */
+/** Visual glyphs (pure-visual never collide with fcpp trigger semantics). */
 const G_BUILD = '🏗️';
 const G_TEST = '🍺';
-const G_DOCS = '📖';
+const G_DOCS = '📚';
+const G_COV = '📊';
+const G_TPL = '📖';
+const G_ENV = '🔧';
+const G_HEALTH = '💚';
+
+/** Markdown `command:` link (optional URL-encoded JSON arg). */
+export function cmdLink(label: string, command: string, arg?: string): string {
+  const target = arg === undefined ? `command:${command}` : `command:${command}?${encodeURIComponent(JSON.stringify(arg))}`;
+  return `[${label}](${target})`;
+}
+
+function envCell(m: ChipModel): string {
+  const summary = (m.envSummary ?? '').trim();
+  const base = summary.length > 0 ? summary : '未检测';
+  return `${base} · ${cmdLink('检查', 'het.envCheck')}`;
+}
+
+function buildCell(m: ChipModel): string {
+  const ok = m.lastBuildOk;
+  const ago = ok && m.buildAgo ? ` · ${m.buildAgo}` : '';
+  const type = ok && m.buildType ? ` · ${m.buildType}` : '';
+  if (ok === null) {
+    return `未运行 · ${cmdLink('构建并测试', 'het.test')}`;
+  }
+  const head = ok ? `✅ 成功${type}${ago}` : '❌ 失败';
+  const extra = ok ? '' : ` · ${cmdLink('输出', 'het.openBuildOutput')}`;
+  return `${head}${extra} · ${cmdLink('构建并测试', 'het.test')}`;
+}
+
+function testCell(m: ChipModel): string {
+  const t = m.test;
+  if (!t) {
+    return '未运行';
+  }
+  const ok = t.failed === 0;
+  const line = `${ok ? '✅' : '❌'} 通过 ${t.passed} · 失败 ${t.failed} · 跳过 ${t.skipped}`;
+  return ok ? line : `${line} · ${cmdLink('查看测试结果', 'het.showTestResults')}`;
+}
+
+function docsCell(m: ChipModel): string {
+  const state = m.docs ?? 'none';
+  if (state === 'running') {
+    return '$(sync~spin) 构建中';
+  }
+  if (state === 'ok') {
+    const links: string[] = [];
+    if (m.docsDoxygen) {
+      links.push(cmdLink('Doxygen', 'het.openDocsArtifact', 'doxygen'));
+    }
+    if (m.docsSphinx) {
+      links.push(cmdLink('Sphinx', 'het.openDocsArtifact', 'sphinx'));
+    }
+    return links.length ? `✅ 成功 · ${links.join(' ')}` : '✅ 成功（产物未找到）';
+  }
+  if (state === 'fail') {
+    return `❌ 失败 · ${cmdLink('查看详情', 'het.docs')}`;
+  }
+  return `未构建 · ${cmdLink('构建文档', 'het.docs')}`;
+}
+
+function coverageCell(m: ChipModel): string {
+  const pct = m.coverage === null || m.coverage === undefined ? '' : `行 ${m.coverage}%`;
+  const switchTxt = m.coverageEnabled === false ? '未开启' : pct || '未生成';
+  const lead = pct && m.coverageEnabled === false ? `${pct}（开关关）` : switchTxt;
+  return `${lead} · ${cmdLink('生成覆盖率', 'het.coverage')}`;
+}
+
+function templateCell(m: ChipModel): string {
+  return m.templateBehind > 0 ? `可更新 ${m.templateBehind} 个提交` : '与参考一致';
+}
+
+function healthCell(m: ChipModel): string {
+  const base = m.health === null ? '未体检' : `${m.health}/100 · ${m.healthVerdict ?? '—'}`;
+  const gaps = (m.healthGaps ?? []).slice(0, 3);
+  const gapTxt = gaps.length ? ` · 可提升：${gaps.join('、')}` : '';
+  const detail = gaps.length ? ` · ${cmdLink('查看详情', 'het.healthReport')}` : '';
+  return `${base}${gapTxt} · ${cmdLink('重新体检', 'het.healthCheck')}${detail}`;
+}
 
 /** Render the chip only while a project is open — monitoring only. */
 export function chipSpec(m: ChipModel): ChipSpec | null {
   if (!m.projectName) {
     return null;
   }
-  const run = m.running ? '$(sync~spin)' : '$(pulse)';
+  const run = m.running && m.running !== 'env' ? '$(sync~spin)' : '$(pulse)';
   const score = m.health === null ? '·' : String(m.health);
   const text = `${run} HeT ${score}`;
 
@@ -67,34 +153,22 @@ export function chipSpec(m: ChipModel): ChipSpec | null {
   const buildIcon = m.lastBuildOk === null ? '$(circle-outline)' : m.lastBuildOk ? '$(pass)' : '$(error)';
   const buildTxt = m.lastBuildOk === null ? '未运行' : m.lastBuildOk ? '成功' : '失败';
   const testIcon = m.test ? (m.test.failed > 0 ? '$(error)' : '$(pass)') : '$(circle-outline)';
-  const tplTxt = m.templateBehind > 0 ? `可更新 ${m.templateBehind} 个提交` : '与参考一致';
+  const testTxt = m.test ? `${m.test.passed}/${m.test.passed + m.test.failed + m.test.skipped}` : '—';
 
-  // ---- compact status strip (codicons only, no emoji pile) ----
-  const badges = [
-    `${healthIcon} 健康 ${healthTxt}`,
-    `${buildIcon} 构建 ${buildTxt}`,
-    `${testIcon} 测试 ${m.test ? `${m.test.passed}/${m.test.passed + m.test.failed + m.test.skipped}` : '—'}`,
-  ].join('   ');
+  const badges = [`${healthIcon} 健康 ${healthTxt}`, `${buildIcon} 构建 ${buildTxt}`, `${testIcon} 测试 ${testTxt}`].join('   ');
 
-  // ---- two-column table: label glyph + value (markdown-native, engineered) ----
-  const rows: { k: string; v: string }[] = [];
-  const buildAgo = m.lastBuildOk === null || !m.buildAgo ? '' : ` · ${m.buildAgo}`;
-  const buildType = m.lastBuildOk === null || !m.buildType ? '' : ` · ${m.buildType}`;
-  rows.push({ k: `${G_BUILD} 构建`, v: `${m.lastBuildOk === null ? '未运行' : m.lastBuildOk ? '成功' : '失败'}${buildType}${buildAgo}`.trim() });
-  rows.push({ k: `${G_TEST} 测试`, v: m.test ? `通过 ${m.test.passed} · 失败 ${m.test.failed} · 跳过 ${m.test.skipped}` : '未运行' });
-  if (m.coverage !== null && m.coverage !== undefined) {
-    rows.push({ k: '📊 覆盖率', v: `${m.coverage}%` });
-  }
-  const runtime = m.runtimeDetail && m.runtimeDetail.length > 0 ? m.runtimeDetail : m.conanEnv ?? '未找到（构建暂不可用）';
-  rows.push({ k: '⚙️ 运行时', v: runtime });
-  rows.push({ k: `${G_DOCS} 模板`, v: tplTxt });
+  const rows: Array<[string, string]> = [
+    [`${G_ENV} 开发环境`, envCell(m)],
+    [`${G_BUILD} 构建结果`, buildCell(m)],
+    [`${G_TEST} 测试中心`, testCell(m)],
+    [`${G_DOCS} 技术文档`, docsCell(m)],
+    [`${G_COV} 代码覆盖`, coverageCell(m)],
+    [`${G_TPL} 模板同步`, templateCell(m)],
+    [`${G_HEALTH} 工程健康`, healthCell(m)],
+  ];
 
-  const table = [
-    '| 指标 | 值 |',
-    '| --- | --- |',
-    ...rows.map((r) => `| ${r.k} | ${r.v} |`),
-  ].join('\n');
-  const runningLine = m.running ? `\n\n$(sync~spin) 运行中：${m.running}` : '';
+  const table = ['| 项目 | 状态 |', '| --- | --- |', ...rows.map(([k, v]) => `| ${k} | ${v} |`)].join('\n');
+  const runningLine = m.running && m.running !== 'env' ? `\n\n$(sync~spin) 运行中：${m.running}` : '';
 
   const tooltip = [
     `**$(package) HeT DevTools · ${m.projectName}**`,
@@ -104,7 +178,7 @@ export function chipSpec(m: ChipModel): ChipSpec | null {
     table,
     runningLine,
     '',
-    '$(keyboard) Enter 打开监控卡 · $(eye) 可隐藏监控 chip',
+    '$(keyboard) Enter 打开完整监控卡 · 悬停操作点击即执行 · $(eye) 可隐藏监控 chip',
   ].join('\n');
 
   return {

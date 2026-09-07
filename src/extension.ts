@@ -4,7 +4,8 @@ import * as vscode from 'vscode';
 import { EXTENSION_ID, LOG_CHANNEL_NAME, log, setOutputChannel } from './constants';
 import { locateConan, runConanCreate, resolveConanRuntime } from './core/conanService';
 import { parseGTestOutput, GTestRunSummary } from './core/gtestRunner';
-import { runHealthCheck } from './core/healthCheck';
+import { runHealthCheck, healthGapLabels, verdictZh } from './core/healthCheck';
+import type { HealthReport } from './core/healthCheck';
 import { CURATED_PACKAGES } from './data/conanIndex';
 import { runAddDependencyQuickPick } from './features/deps/quickpick';
 import { parseCompilerOutput } from './core/outputParser';
@@ -56,7 +57,7 @@ import { providerLabel, ProvisionPrefs } from './core/provisionPlan';
 import { currentManagedStatus, managedGc, managedPrepare, managedRemove } from './features/env/managedProvisioner';
 import { getWslLaneStatus } from './features/env/wslProbe';
 import { runWslConanCreate } from './features/env/wslLane';
-import { envConanFact } from './features/env/envSample';
+import { collectEnvSample, envConanFact } from './features/env/envSample';
 import { parseProjectToolchain } from './core/projectToolchain';
 import { getMacosLaneStatus } from './features/env/macosProbe';
 import { openHudPanel } from './features/hud/panel';
@@ -82,7 +83,12 @@ let lastBuildAt = 0;
 let lastConanOutput = '';
 let lastBenchParse: { complete: boolean; cases: [string, string][] } | null = null;
 let wizardAutoOpened = false;
-let lastHealth: { score: number; at: number } | undefined;
+let lastHealth: { score: number; verdict: 'PASS' | 'WARN' | 'FAIL'; gaps: string[]; at: number } | undefined;
+let lastHealthReport: HealthReport | null = null;
+/** V5-2: last docs build outcome (技术文档 row). */
+let lastDocs: { ok: boolean; at: number } | null = null;
+/** V5-2: short-lived env sample summary cache for the 开发环境 row. */
+let envSummaryCache: { at: number; summary: string } | null = null;
 let onboardingNotified = false;
 let lastChip: { text: string; tooltip: string; command?: string } | null = null;
 /** Timer id for the "hide chip for 5 minutes" snooze. */
@@ -790,6 +796,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void ensureHealthCached(true);
       openDashboard(context);
     }),
+    vscode.commands.registerCommand('het.envCheck', async () => {
+      const ctx = contextRef;
+      const sample = ctx ? await collectEnvSample(ctx.globalStorageUri.fsPath).catch(() => null) : null;
+      if (sample) {
+        envSummaryCache = { at: Date.now(), summary: sample.summary };
+      }
+      await refreshChip();
+      if (sample && !quietHost()) {
+        void vscode.window.showInformationMessage(`开发环境：${sample.summary}`);
+      }
+      return sample?.summary ?? null;
+    }),
+    vscode.commands.registerCommand('het.openDocsArtifact', async (family?: string) => {
+      const root = currentProject?.root;
+      if (!root) {
+        return;
+      }
+      const dir = family === 'doxygen' ? 'doxygen' : 'sphinx';
+      const found = await findFirstIndex(join(root, 'docs', dir, 'build'));
+      if (!found) {
+        void vscode.window.showWarningMessage(`未找到 ${dir} 文档产物（请先构建文档）。`);
+        return;
+      }
+      void vscode.env.openExternal(vscode.Uri.file(found));
+    }),
+    vscode.commands.registerCommand('het.openBuildOutput', () => {
+      channel?.show(true);
+    }),
+    vscode.commands.registerCommand('het.healthReport', () => showHealthReportPanel(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
     vscode.commands.registerCommand('het.getTestSummary', () =>
       lastTestSummary
@@ -1385,6 +1420,8 @@ function openDocsPanel(context: vscode.ExtensionContext): void {
     const artifacts = await locateArtifacts(root);
     const ok = result.code === 0;
     log(`[docs] finished ok=${ok} artifacts=${artifacts.length}`);
+    lastDocs = { ok, at: Date.now() };
+    void refreshChip();
     if (!ok) {
       return { ok: false, message: '文档生成失败：请查看“输出 → HeT DevTools”中的原始日志（常见：注释标注/工具缺失）。' };
     }
@@ -1431,6 +1468,53 @@ function openDocsPanel(context: vscode.ExtensionContext): void {
   };
 
   showDocsPanel(context, { getState, runDocs, fixGraphviz, openArtifact });
+}
+
+/** V5-2: lightweight 体检明细 panel — every check with score, colour, detail. */
+function showHealthReportPanel(context: vscode.ExtensionContext): void {
+  const panel = vscode.window.createWebviewPanel(
+    'het.healthReport',
+    'HeT DevTools — 工程健康明细',
+    vscode.ViewColumn.Active,
+    { enableScripts: true, localResourceRoots: [context.extensionUri] },
+  );
+  panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.png');
+  const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const render = (): void => {
+    const r = lastHealthReport;
+    if (!r) {
+      panel.webview.html =
+        '<body style="font-family:var(--vscode-font-family)"><h3>工程健康</h3><p>尚未体检 — 点击重新体检，或先在项目中构建/测试。</p><button id="rerun">重新体检</button>' +
+        '<script>const vscode=acquireVsCodeApi();document.getElementById("rerun").onclick=()=>vscode.postMessage({type:"rerun"});</script></body>';
+      return;
+    }
+    const rows = r.checks
+      .map((c) => {
+        const colour = c.kind === 'ok' ? '#4ec9b0' : c.kind === 'warn' ? '#d7ba7d' : '#f48771';
+        const mark = c.kind === 'ok' ? '✓' : c.kind === 'warn' ? '!' : '✗';
+        const part = c.kind === 'ok' ? c.weight : c.kind === 'warn' ? Math.round(c.weight * 0.5) : 0;
+        return `<div style="padding:6px 0;border-bottom:1px solid var(--vscode-panel-border)">` +
+          `<span style="color:${colour};font-weight:600">${mark} ${esc(c.title)}</span>` +
+          `<span style="float:right;opacity:.7">${part}/100</span>` +
+          `<div style="opacity:.75;font-size:12px">${esc(c.detail)}</div>` +
+          `${c.suggestion ? `<div style="font-size:12px">建议：${esc(c.suggestion)}</div>` : ''}</div>`;
+      })
+      .join('');
+    const tone = r.verdict === 'PASS' ? '#4ec9b0' : r.verdict === 'WARN' ? '#d7ba7d' : '#f48771';
+    panel.webview.html =
+      '<body style="font-family:var(--vscode-font-family);padding:4px 12px">' +
+      `<h3>工程健康：<span style="color:${tone}">${r.score}/100 · ${verdictZh(r.verdict)}</span></h3>` +
+      rows +
+      '<button id="rerun" style="margin-top:10px">重新体检</button>' +
+      '<script>const vscode=acquireVsCodeApi();document.getElementById("rerun").onclick=()=>vscode.postMessage({type:"rerun"});</script></body>';
+  };
+  panel.webview.onDidReceiveMessage((message: { type: string }) => {
+    if (message.type === 'rerun') {
+      void ensureHealthCached(true);
+      setTimeout(render, 700);
+    }
+  });
+  render();
 }
 
 /** Quality & security panel (G-11): native gates, degraded gracefully. */
@@ -2989,12 +3073,104 @@ async function assembleHudModel(): Promise<HudModel> {
   };
 }
 
+/** V5-2: do the Sphinx/Doxygen build trees contain an index.html? (disk probe) */
+async function probeDocsArtifacts(root?: string): Promise<{ doxygen: boolean; sphinx: boolean }> {
+  const out = { doxygen: false, sphinx: false };
+  if (!root) {
+    return out;
+  }
+  const { readdir } = await import('node:fs/promises');
+  const scan = async (dir: string): Promise<boolean> => {
+    try {
+      const entries = await readdir(dir, { withFileTypes: true });
+      for (const e of entries) {
+        if (e.isFile() && e.name === 'index.html') {
+          return true;
+        }
+        if (e.isDirectory() && !e.name.startsWith('.') && !['search', '_static'].includes(e.name)) {
+          if (await scan(join(dir, e.name))) {
+            return true;
+          }
+        }
+      }
+    } catch {
+      /* missing tree */
+    }
+    return false;
+  };
+  out.doxygen = await scan(join(root, 'docs', 'doxygen', 'build'));
+  out.sphinx = await scan(join(root, 'docs', 'sphinx', 'build'));
+  return out;
+}
+
+/** V5-2: docs row state = disk artifacts (ok) → last failed run → none. */
+function docsRowState(art: { doxygen: boolean; sphinx: boolean }, last: { ok: boolean } | null): {
+  state: 'ok' | 'fail' | 'none';
+  doxygen: boolean;
+  sphinx: boolean;
+} {
+  if (art.doxygen || art.sphinx) {
+    return { state: 'ok', doxygen: art.doxygen, sphinx: art.sphinx };
+  }
+  if (last && !last.ok) {
+    return { state: 'fail', doxygen: false, sphinx: false };
+  }
+  return { state: 'none', doxygen: false, sphinx: false };
+}
+
+/** V5-2: first matching `index.html` under a docs build tree (or null). */
+async function findFirstIndex(buildDir: string): Promise<string | null> {
+  const { readdir } = await import('node:fs/promises');
+  const scan = async (dir: string): Promise<string | null> => {
+    let entries: { name: string; isDir: boolean; isFile: boolean }[];
+    try {
+      entries = (await readdir(dir, { withFileTypes: true })).map((d) => ({ name: d.name, isDir: d.isDirectory(), isFile: d.isFile() }));
+    } catch {
+      return null;
+    }
+    for (const e of entries) {
+      if (e.isFile && e.name === 'index.html') {
+        return join(dir, e.name);
+      }
+    }
+    for (const e of entries) {
+      if (e.isDir && !e.name.startsWith('.') && !['search', '_static'].includes(e.name)) {
+        const hit = await scan(join(dir, e.name));
+        if (hit) {
+          return hit;
+        }
+      }
+    }
+    return null;
+  };
+  return scan(buildDir);
+}
+
+/** V5-2: cached single env summary line for the hover 开发环境 row. */
+async function currentEnvSummary(): Promise<string | null> {
+  if (envSummaryCache && Date.now() - envSummaryCache.at < 60_000) {
+    return envSummaryCache.summary;
+  }
+  if (!contextRef) {
+    return null;
+  }
+  try {
+    const sample = await collectEnvSample(contextRef.globalStorageUri.fsPath);
+    envSummaryCache = { at: Date.now(), summary: sample.summary };
+    return sample.summary;
+  } catch {
+    return null;
+  }
+}
+
 /** Push the latest model into the single status-bar chip (hide = invisible). */
 async function refreshChip(): Promise<void> {
   if (!statusItem) {
     return;
   }
   const st = getCockpitState();
+  const [envSummary, docsArt] = await Promise.all([currentEnvSummary(), probeDocsArtifacts(currentProject?.root)]);
+  const docs = docsRowState(docsArt, lastDocs);
   const spec = chipSpec({
     projectName: currentProject?.metadata?.name ?? '',
     health: lastHealth?.score ?? null,
@@ -3008,6 +3184,13 @@ async function refreshChip(): Promise<void> {
     buildAgo: agoText(lastBuildAt || undefined),
     buildType: currentProject?.metadata?.build_type ?? null,
     runtimeDetail: conanRuntimeDetail(),
+    envSummary,
+    docs: docs.state,
+    docsDoxygen: docs.doxygen,
+    docsSphinx: docs.sphinx,
+    coverageEnabled: currentProject?.metadata?.activate_code_coverage ?? null,
+    healthVerdict: lastHealth?.verdict ? verdictZh(lastHealth.verdict) : null,
+    healthGaps: lastHealth?.gaps ?? null,
   });
   if (!spec) {
     statusItem.hide();
@@ -3015,7 +3198,9 @@ async function refreshChip(): Promise<void> {
     return;
   }
   statusItem.text = spec.text;
-  statusItem.tooltip = new vscode.MarkdownString(spec.tooltip, true);
+  const md = new vscode.MarkdownString(spec.tooltip, true);
+  md.isTrusted = true; // command: links are only clickable in trusted markdown
+  statusItem.tooltip = md;
   statusItem.command = spec.command;
   statusItem.backgroundColor = spec.color ? new vscode.ThemeColor(spec.color) : undefined;
   statusItem.show();
@@ -3132,7 +3317,8 @@ async function ensureHealthCached(force: boolean): Promise<void> {
       state: { lastBuildOk, lastTestsOk: lastTestSummary ? lastTestSummary.failed === 0 : undefined },
     });
     if (health && typeof health.score === 'number') {
-      lastHealth = { score: health.score, at: Date.now() };
+      lastHealthReport = health;
+      lastHealth = { score: health.score, verdict: health.verdict, gaps: healthGapLabels(health), at: Date.now() };
       emitCockpitEvent({ type: 'health', score: health.score });
       await refreshChip();
     }
