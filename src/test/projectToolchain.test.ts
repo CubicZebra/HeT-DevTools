@@ -27,13 +27,21 @@ describe('V4-8 projectToolchain (metadata semantics)', () => {
     assert.strictEqual(parseProjectToolchain('not json'), undefined);
   });
 
-  it('withProjectToolchain sets the field and preserves the rest, pretty printed', () => {
+  it('withProjectToolchain sets the field (format-preserving)', () => {
     const out = withProjectToolchain('{"name":"mylib","version":"0.1.0"}', TOOLCHAIN_SYSTEM);
     const meta = JSON.parse(out) as Record<string, string>;
     assert.strictEqual(meta.name, 'mylib');
     assert.strictEqual(meta.version, '0.1.0');
     assert.strictEqual(meta.toolchain, TOOLCHAIN_SYSTEM);
-    assert.ok(out.includes('\n  '), 'pretty printed');
+    assert.ok(out.includes('"toolchain": "system"'));
+  });
+
+  it('withProjectToolchain preserves an existing fcpp-style multiline document', () => {
+    const doc = '{\n  "name": "mylib",\n  "version": "0.1.0",\n  "authors": ["A <a@b.c>"],\n  "dependencies": {\n    "common": {"ZLIB": ["ZLIB::ZLIB"]}\n  },\n  "workflow_triggers": {\n    "build": true\n  }\n}\n';
+    const out = withProjectToolchain(doc, TOOLCHAIN_MANAGED);
+    assert.strictEqual((JSON.parse(out) as { toolchain: string }).toolchain, 'managed');
+    assert.ok(out.includes('  "authors": ["A <a@b.c>"],'), 'unrelated rows preserved');
+    assert.ok(out.includes('  "toolchain": "managed",\n  "dependencies": {'), 'toolchain inserted above dependencies');
   });
 
   it('labels are honest', () => {

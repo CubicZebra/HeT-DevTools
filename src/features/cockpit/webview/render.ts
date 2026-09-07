@@ -496,7 +496,7 @@ export function renderWizardRegion(
       ${row(t(lang, '构建参数', 'Build params'), `${draft.buildType ?? 'Debug'} · C++${draft.cppstd ?? '17'}`)}
       ${row(t(lang, 'Python 绑定', 'Python bindings'), draft.pybind === 'yes' ? t(lang, '开启', 'On') : t(lang, '关闭', 'Off'))}
     </div>
-    <div class="status">${t(lang, '确认后将：复制模板 → 改写 metadata.json（备份 .bak）→ git init + 基线提交 → 记录模板 ref。离线环境自动回退本地模板副本。', 'Will: copy template → rewrite metadata.json (.bak backup) → git init + baseline commit → record template ref. Offline auto-falls back to the local copy.')}</div>`;
+    <div class="status">${t(lang, '确认后将：复制模板 → 改写 metadata.json（保留原排版）→ git init + 基线提交 → 记录模板 ref。离线环境自动回退本地模板副本。', 'Will: copy template → rewrite metadata.json (format-preserving) → git init + baseline commit → record template ref. Offline auto-falls back to the local copy.')}</div>`;
   }
 
   const err = wizard.error ? `<div class="warn">${esc(wizard.error)}</div>` : '';

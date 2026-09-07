@@ -6,8 +6,9 @@
  *                projects; deterministic, uninstall-clean).
  *   - "system":  an explicit user choice to use the machine's own toolchain
  *                (e.g. MSVC compatibility mode → coverage:none).
- * Pure parsing/rewriting of metadata.json text (JSON only, no comments).
+ * V5-3: writes go through surgical text patching (fcpp formatting preserved).
  */
+import { surgicalPatch } from './metadataText';
 
 export const TOOLCHAIN_MANAGED = 'managed';
 export const TOOLCHAIN_SYSTEM = 'system';
@@ -24,11 +25,9 @@ export function parseProjectToolchain(metaText: string): ProjectToolchain | unde
   }
 }
 
-/** Set metadata.toolchain and return the rewritten text (pretty-printed). */
+/** Set metadata.toolchain and return the rewritten text (formatting preserved). */
 export function withProjectToolchain(metaText: string, value: ProjectToolchain): string {
-  const meta = JSON.parse(metaText) as Record<string, unknown>;
-  meta.toolchain = value;
-  return `${JSON.stringify(meta, null, 2)}\n`;
+  return surgicalPatch(metaText, { toolchain: value }).text;
 }
 
 /** Human label for a toolchain semantic (or undefined → absent). */

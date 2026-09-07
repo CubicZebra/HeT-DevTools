@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { FcppMetadata } from '../types';
-import { pathExists, readJson, writeJson } from '../utils/fs';
+import { pathExists, readJson, readText, writeText } from '../utils/fs';
+import { surgicalPatch } from './metadataText';
 
 /**
  * metadata.json service (development-plan T-2.1).
@@ -214,7 +215,8 @@ export interface ApplyMetadataOptions {
  * Preview or apply a top-level patch against metadata.json.
  * - validates the patched document (errors block writes)
  * - computes a field diff (preview)
- * - persists with a `.bak` backup when persist=true
+ * - persists SURGICALLY (V5-3): only the patched fields change on disk, the
+ *   rest of the file keeps its original fcpp formatting — no `.bak` backup.
  */
 export async function applyMetadataPatch(
   root: string,
@@ -234,7 +236,9 @@ export async function applyMetadataPatch(
     return { ok: false, issues, diff };
   }
   if (options.persist) {
-    await writeJson(file, next, { backup: true });
+    const original = await readText(file);
+    const out = surgicalPatch(original, patch);
+    await writeText(file, out.text);
   }
   return { ok: true, issues, diff };
 }

@@ -40,7 +40,8 @@ import { parseBlueprint, renderContractTest, renderImplementationPlan } from './
 import { composeHeader, defaultEmoji, parsePorcelain, suggestType, TRIGGER_EMOJIS } from './core/commitAssistant';
 import { applyMetadataPatch, loadMetadata, validateMetadata, hasErrors } from './core/metadataService';
 import { formatConfigForFile, parseClangFormatOutput, parseClangTidyOutput, lintCommitHeader, collectHeaders, QualityIssue } from './core/qualityGates';
-import { pathExists, readText, writeJson, writeText } from './utils/fs';
+import { pathExists, readText, writeText } from './utils/fs';
+import { fcppStyleStringify } from './core/metadataText';
 import { run, which } from './utils/exec';
 import { docsOptions, graphvizMismatch } from './core/docsService';
 import { configPlatform, fieldsFor, parseBenchmarkProtocol, replaceJsoncField } from './core/benchmark';
@@ -622,7 +623,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         metadataExtra.enable_python_bindings = true;
       }
       const choice = await vscode.window.showWarningMessage(
-        `在 ${dest} 创建项目 ${name}？\n\n将复制模板 → 改写 metadata.json（name/description/构建参数，备份 .bak）→ git init + 基线提交 → 记录 .het/template-ref.json。`,
+        `在 ${dest} 创建项目 ${name}？\n\n将复制模板 → 改写 metadata.json（name/description/构建参数，保留原排版、无 .bak）→ git init + 基线提交 → 记录 .het/template-ref.json。`,
         { modal: true },
         '创建',
         '取消',
@@ -885,7 +886,7 @@ function createDepsService(): {
       return;
     }
     await writeText(join(root, 'conandata.yml'), conandata);
-    await writeJson(join(root, 'metadata.json'), metadata, { backup: true });
+    await writeText(join(root, 'metadata.json'), fcppStyleStringify(metadata));
   };
 
   return {
@@ -1266,7 +1267,7 @@ function openCoveragePanel(context: vscode.ExtensionContext): void {
     reportCache = '';
     if (applied.ok) {
       await refreshStatus();
-      return { ok: true, message: enabled ? '已开启 activate_code_coverage（备份 .bak）。' : '已关闭 activate_code_coverage。' };
+      return { ok: true, message: enabled ? '已开启 activate_code_coverage。' : '已关闭 activate_code_coverage。' };
     }
     return { ok: false, message: `写入失败：${applied.issues.map((i) => i.message).join('；')}` };
   };
@@ -1406,7 +1407,7 @@ function openDocsPanel(context: vscode.ExtensionContext): void {
     const applied = await applyMetadataPatch(root, { graphviz_bin: gv.expected }, { persist: true });
     if (applied.ok) {
       await refreshStatus();
-      return { ok: true, message: '已本机修正 graphviz_bin（已备份 .bak）。提交前请还原该字段。' };
+      return { ok: true, message: '已本机修正 graphviz_bin（保留原排版）。提交前请还原该字段。' };
     }
     return { ok: false, message: `写入失败：${applied.issues.map((i) => i.message).join('；')}` };
   };
@@ -1856,7 +1857,7 @@ function openReleasePanel(context: vscode.ExtensionContext): void {
     const applied = await applyMetadataPatch(root, { workflow_triggers: triggers, build_type: 'Release' }, { persist: true });
     if (applied.ok) {
       await refreshStatus();
-      return { ok: true, message: '已开启发布（备份 .bak）。用「提交助手并预填 📦」发起发布提交。' };
+      return { ok: true, message: '已开启发布。用「提交助手并预填 📦」发起发布提交。' };
     }
     return { ok: false, message: `写入失败：${applied.issues.map((i) => i.message).join('；')}` };
   };
@@ -2717,7 +2718,7 @@ async function runNewProjectWizard(): Promise<void> {
       ? `本地模板副本：${source.localPath}`
       : `上游锁定：${source.repo}（TEMPLATE_REF）`;
   const choice = await vscode.window.showWarningMessage(
-    `在 ${dest} 创建项目 ${name}？\n\n模板源：${label}\n\n将复制模板 → 改写 metadata.json（name/description，备份 .bak）→ git init + 基线提交（历史可追溯模板 ref）→ 记录 .het/template-ref.json。`,
+    `在 ${dest} 创建项目 ${name}？\n\n模板源：${label}\n\n将复制模板 → 改写 metadata.json（name/description，保留原排版、无 .bak）→ git init + 基线提交（历史可追溯模板 ref）→ 记录 .het/template-ref.json。`,
     { modal: true },
     '创建',
     '取消',
@@ -2828,7 +2829,7 @@ function openSettingsPanel(context: vscode.ExtensionContext): void {
       }
       const summary = preview.diff.length === 0 ? '（无字段变化）' : preview.diff.map((d) => d.field).join(', ');
       const choice = await vscode.window.showWarningMessage(
-        `将写回 ${preview.diff.length} 项变更：${summary}。原文件会备份为 metadata.json.bak。`,
+        `将写回 ${preview.diff.length} 项变更：${summary}。按 fcpp 原排版手术式更新（无 .bak）。`,
         { modal: true },
         '应用',
         '取消',
@@ -2839,7 +2840,7 @@ function openSettingsPanel(context: vscode.ExtensionContext): void {
       const applied = await applyMetadataPatch(root, patch, { persist: true });
       return {
         ok: applied.ok,
-        message: applied.ok ? `已保存 ${applied.diff.length} 项变更（备份 .bak）` : '写回失败',
+        message: applied.ok ? `已保存 ${applied.diff.length} 项变更（排版保留，无 .bak）` : '写回失败',
         diff: applied.diff,
       };
     },

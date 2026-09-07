@@ -121,7 +121,7 @@ function buildHtml(metadata?: FcppMetadata, error?: string): string {
   return pageShell(
     'HeT DevTools — 项目设置',
     `<h1>项目设置 <span class="tag">metadata.json · name=${esc(m.name ?? '?')} v${esc(m.version ?? '?')}</span></h1>
-     <div class="sub">保存前会校验并预览变更（diff），确认后才写回，原文件自动备份 .bak。</div>
+     <div class="sub">保存前会校验并预览变更（diff），确认后才写回：按 fcpp 原排版手术式更新（无 .bak）。</div>
      ${groupHtml}
      <h2>依赖与 CI 开关</h2>
      <div class="card">

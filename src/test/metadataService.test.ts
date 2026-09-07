@@ -3,8 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FcppMetadata } from '../types';
-import { pathExists, readJson, writeJson } from '../utils/fs';
+import { pathExists, readJson, readText, writeJson, writeText } from '../utils/fs';
 import { applyMetadataPatch, diffMetadata, validateMetadata } from '../core/metadataService';
+import { fcppStyleStringify } from '../core/metadataText';
 
 function baseMetadata(): FcppMetadata {
   return {
@@ -120,16 +121,22 @@ describe('metadataService.applyMetadataPatch', () => {
     }
   });
 
-  it('persists a valid patch and writes a .bak of the previous content', async () => {
+  it('persists a valid patch surgically (no .bak, formatting preserved)', async () => {
     const { root, cleanup } = makeRoot();
     try {
-      await writeJson(join(root, 'metadata.json'), baseMetadata());
+      const original = fcppStyleStringify(baseMetadata());
+      await writeText(join(root, 'metadata.json'), original);
       const res = await applyMetadataPatch(root, { build_type: 'Release' }, { persist: true });
       assert.strictEqual(res.ok, true);
-      const onDisk = (await readJson(join(root, 'metadata.json'))) as { build_type: string };
-      assert.strictEqual(onDisk.build_type, 'Release');
-      const bak = (await readJson(join(root, 'metadata.json.bak'))) as { build_type: string };
-      assert.strictEqual(bak.build_type, 'Debug');
+      const text = await readText(join(root, 'metadata.json'));
+      assert.strictEqual((JSON.parse(text) as { build_type: string }).build_type, 'Release');
+      assert.ok(!(await pathExists(join(root, 'metadata.json.bak'))), 'no .bak backup is written');
+      // Untouched rows keep their original fcpp formatting byte-for-byte.
+      assert.ok(text.includes('"common": {"ZLIB": ["ZLIB::ZLIB"]}'), 'compact deps style preserved');
+      assert.ok(text.includes('"authors"') === original.includes('"authors"'));
+      const changed = text.split('\n').filter((l, i) => l !== original.split('\n')[i]);
+      assert.strictEqual(changed.length, 1, changed.join('\n'));
+      assert.ok(changed[0].includes('"build_type": "Release"'));
     } finally {
       cleanup();
     }
