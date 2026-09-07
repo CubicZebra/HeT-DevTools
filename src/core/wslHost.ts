@@ -10,6 +10,24 @@
 /** Distro name the provisioner creates when it owns the lane (V4-3/V4-8). */
 export const MANAGED_DISTRO = 'het-fcpp';
 
+/**
+ * wsl.exe emits UTF-16LE (optionally with a BOM) for some commands such as
+ * `wsl -l -q` when stdout is redirected; the utf8 stream decoder turns each
+ * byte into a char (invalid bytes → U+FFFD), so the JS string carries a NUL
+ * byte between every ASCII char. Rebuild the original UTF-16LE text from the
+ * char pairs (the leading two replacement chars reproduce the BOM).
+ */
+export function decodeWslOutput(raw: string): string {
+  if (!raw.includes('\u0000')) {
+    return raw;
+  }
+  const chars: string[] = [];
+  for (let i = 0; i + 1 < raw.length; i += 2) {
+    chars.push(String.fromCharCode(raw.charCodeAt(i) | (raw.charCodeAt(i + 1) << 8)));
+  }
+  return chars.join('').replace(/^(?:\uFEFF|\uFFFD)+/u, '');
+}
+
 /** Map a Windows path to its WSL `/mnt/<drive>/…` form (UNC not supported). */
 export function toWslPath(p: string): string {
   const s = p.trim().replace(/\\/g, '/');

@@ -104,12 +104,15 @@ export function envWithManaged(layout: ManagedLayout, isWin: boolean, basePath: 
  * Generate a conan default profile for a managed gcc/clang toolchain.
  * Only the settings that the manifest owns are written; the caller passes the
  * exact compiler executables (managed gcc) so nothing is "detected".
+ * Conan 2 profile syntax: compiler executables go in `[conf]` via
+ * `tools.build:compiler_executables` (Conan 1's `[env]` is rejected).
  */
 export function managedProfile(
   compiler: { cc: string; cxx: string; version: string; libcxx: string },
   os: 'Linux' | 'Macos' | 'Windows',
   arch: string,
   buildType: string,
+  cppstd = '17',
 ): string {
   const settings = [
     `[settings]`,
@@ -118,13 +121,11 @@ export function managedProfile(
     `compiler=${os === 'Macos' ? 'apple-clang' : 'gcc'}`,
     `compiler.version=${compiler.version}`,
     `compiler.libcxx=${compiler.libcxx}`,
+    `compiler.cppstd=${cppstd}`,
     `build_type=${buildType}`,
     ``,
-    `[env]`,
-    `CC=${compiler.cc}`,
-    `CXX=${compiler.cxx}`,
-    ``,
     `[conf]`,
+    `tools.build:compiler_executables={"c": "${compiler.cc}", "cpp": "${compiler.cxx}"}`,
     `tools.build:download_source=True`,
   ].join('\n');
   return settings;

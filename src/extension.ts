@@ -54,6 +54,8 @@ import { getCurrentProvisionPlan, getHostCapabilities } from './features/env/pro
 import { providerLabel, ProvisionPrefs } from './core/provisionPlan';
 import { currentManagedStatus, managedGc, managedPrepare, managedRemove } from './features/env/managedProvisioner';
 import { getWslLaneStatus } from './features/env/wslProbe';
+import { runWslConanCreate } from './features/env/wslLane';
+import { parseProjectToolchain } from './core/projectToolchain';
 import { getMacosLaneStatus } from './features/env/macosProbe';
 import { openHudPanel } from './features/hud/panel';
 import { HudEnvRow, HudModel, defaultHudActions, hudEnabled } from './features/hud/hudModel';
@@ -3186,8 +3188,59 @@ async function emitTemplateBehind(): Promise<void> {
   }
 }
 
+/** Read the project toolchain semantic (metadata.toolchain; missing = managed). */
+async function projectToolchainFor(project: FcppProject): Promise<'managed' | 'system'> {
+  try {
+    const text = await readText(join(project.root, 'metadata.json'));
+    return parseProjectToolchain(text) ?? 'managed';
+  } catch {
+    return 'managed';
+  }
+}
+
 /** Run `conan create` in the project and stream everything to the output channel. */
 async function runConanOnce(project: FcppProject): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  // V5-1: managed semantics on a WSL2-ready Windows host → build INSIDE the
+  // WSL2 managed lane (Linux-identical gcc/gcov semantics, isolated from the
+  // distro's conda base / FEniCS envs via its own venv + CONAN_HOME + profile).
+  const isWin = process.platform === 'win32';
+  const tc = await projectToolchainFor(project);
+  let wslDistro: string | null = null;
+  if (isWin && tc !== 'system') {
+    const plan = await getCurrentProvisionPlan(false, provisionPrefs()).catch(() => null);
+    const wsl = await getWslLaneStatus(false).catch(() => null);
+    if (plan?.provider === 'win-wsl2' && wsl?.available && wsl.distro) {
+      wslDistro = wsl.distro;
+    } else if (plan?.provider === 'win-wsl2-pending') {
+      throw new Error(
+        'managed 工具链构建需要 WSL2 发行版（当前已有 WSL 但无可用的发行版）。\n' +
+          '请在 PowerShell 运行：wsl --install -d Ubuntu-24.04\n' +
+          '或在 metadata.json 中把 toolchain 设为 "system" 以使用本机工具链。',
+      );
+    } else {
+      log(`[conan] 未启用 WSL2 车道：provider=${plan?.provider ?? '?'} toolchain=${tc}`);
+    }
+  }
+  if (wslDistro) {
+    log(`[conan] WSL2 托管车道：distro=${wslDistro} · ${project.root}`);
+    emitCockpitEvent({ type: 'log:start', title: `conan create . (Debug) · WSL2 ${wslDistro}` });
+    const summary = await runWslConanCreate(wslDistro, project.root, {
+      buildType: 'Debug',
+      onStdout: (c) => {
+        channel?.append(c);
+        emitCockpitEvent({ type: 'log:append', line: c.replace(/\s+$/u, '') });
+      },
+      onStderr: (c) => {
+        channel?.append(c);
+        emitCockpitEvent({ type: 'log:append', line: c.replace(/\s+$/u, '') });
+      },
+    });
+    lastConanOutput = `${summary.stdout}\n${summary.stderr}`;
+    channel?.appendLine('');
+    emitCockpitEvent({ type: 'log:done', ok: summary.ok });
+    return { ok: summary.ok, stdout: summary.stdout, stderr: summary.stderr };
+  }
+
   const rt = await ensureConanRuntime();
   const conanExe = rt?.exe ?? (await locateConan());
   if (!conanExe) {

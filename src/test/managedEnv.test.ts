@@ -72,12 +72,13 @@ describe('V4-2 managedEnv (managed storage layout/state/profiles)', () => {
     assert.strictEqual(venvBinDir(l, true).split(/[\\/]/).pop(), 'Scripts');
   });
 
-  it('managedProfile emits gcc settings + pinned CC/CXX env', () => {
+  it('managedProfile emits gcc settings + pinned compiler executables (Conan 2 conf)', () => {
     const p = managedProfile({ cc: '/opt/gcc/bin/gcc', cxx: '/opt/gcc/bin/g++', version: '13.2', libcxx: 'libstdc++11' }, 'Linux', 'x86_64', 'Debug');
     assert.ok(p.includes('compiler=gcc'));
     assert.ok(p.includes('compiler.version=13.2'));
-    assert.ok(p.includes('CC=/opt/gcc/bin/gcc'));
-    assert.ok(p.includes('CXX=/opt/gcc/bin/g++'));
+    assert.ok(p.includes('compiler.cppstd=17'));
+    assert.ok(p.includes('tools.build:compiler_executables={"c": "/opt/gcc/bin/gcc", "cpp": "/opt/gcc/bin/g++"}'));
+    assert.ok(!p.includes('[env]'));
     assert.ok(!p.includes('detect'));
   });
 

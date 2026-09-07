@@ -2,6 +2,17 @@
 
 All notable changes follow [Conventional Commits](https://www.conventionalcommits.org/) + fcpp emoji superset.
 
+## [0.2.0] - 2026-09-07
+
+### Added
+
+- **构建执行接入环境车道（V5-1，治本 all-in-one）**：`managed` 语义项目在 Windows 上自动经 **WSL2 托管车道**构建——Linux 同语义（gcc-13 + gcov/lcov）、与发行版内的 conda base / FEniCS 等环境完全隔离。
+  - 车道自举（幂等）：`~/.het-fti/managed-env` 下私有 venv（conan/cmake/ninja）+ 私有 `CONAN_HOME` + **生成式**（绝不探测）Conan 2 profile（gcc 13 / libstdc++11 / cppstd 17 + `tools.build:compiler_executables` 钉死 gcc-13/g++-13）。
+  - 自愈：发行版缺 `python3-venv` 时经 WSL 免密 root 一次性 `apt-get install python3-venv` 后重试；缺 gcc-13/lcov 时给出可执行指引。
+  - 脚本一律以文件方式执行（`wsl.exe … -- bash <file>`），绕开 wsl.exe 对多行 argv 脚本的破坏；诊断路径 `/mnt/<drive>/…` 自动映射回 Windows 供“问题”面板跳转。
+  - 修复潜伏缺陷：`wsl -l -q` 的 **UTF-16LE 输出解码**（此前发行版名是 NUL 垃圾）；`managedProfile` 由 Conan 1 的 `[env]` 改为 Conan 2 的 `[conf] tools.build:compiler_executables` 并补 `compiler.cppstd`。
+  - 无 WSL 发行版时给出明确指引（不再静默回落到不可用的 MSVC 默认 profile）；`toolchain: system` 保持原样（本机工具链兼容模式）。
+
 ## [0.1.1] - 2026-09-07
 
 ### Added

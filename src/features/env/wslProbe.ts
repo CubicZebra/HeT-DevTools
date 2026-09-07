@@ -7,7 +7,7 @@
  * sudo, no human interaction — pure capability report for the dashboard.
  */
 import { run } from '../../utils/exec';
-import { MANAGED_DISTRO, WslToolSnapshot, parseWslList, parseWslToolReport } from '../../core/wslHost';
+import { MANAGED_DISTRO, WslToolSnapshot, decodeWslOutput, parseWslList, parseWslToolReport } from '../../core/wslHost';
 
 export interface WslLaneStatus {
   available: boolean;
@@ -19,11 +19,14 @@ export interface WslLaneStatus {
 
 let cache: { at: number; status: WslLaneStatus } | null = null;
 
+// NOTE: no `$(...)` here — wsl.exe round-trips a `bash -c/-lc` argv string and
+// command substitutions get mangled (observed: syntax error at the `$(` line).
+// Line-oriented `printf` + piping survives the round trip.
 const PROBE = [
-  "echo gcc:$(gcc --version 2>/dev/null | head -1 || echo -)",
-  "echo cmake:$(cmake --version 2>/dev/null | head -1 || echo -)",
-  "echo conan:$(conan --version 2>/dev/null || echo -)",
-  "echo lcov:$(lcov --version 2>/dev/null | head -1 || echo -)",
+  "printf 'gcc:'; gcc --version 2>/dev/null | head -1; echo",
+  "printf 'cmake:'; cmake --version 2>/dev/null | head -1; echo",
+  "printf 'conan:'; conan --version 2>/dev/null; echo",
+  "printf 'lcov:'; lcov --version 2>/dev/null | head -1; echo",
 ].join(';');
 
 async function listDistros(): Promise<string[]> {
@@ -32,7 +35,7 @@ async function listDistros(): Promise<string[]> {
     if (r.code !== 0) {
       return [];
     }
-    return parseWslList(`${r.stdout}\n${r.stderr}`);
+    return parseWslList(decodeWslOutput(`${r.stdout}\n${r.stderr}`));
   } catch {
     return [];
   }
@@ -45,7 +48,7 @@ export async function probeDistroTools(distro: string): Promise<WslToolSnapshot>
     if (r.code !== 0) {
       return {};
     }
-    return parseWslToolReport(r.stdout);
+    return parseWslToolReport(decodeWslOutput(r.stdout));
   } catch {
     return {};
   }

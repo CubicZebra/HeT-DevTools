@@ -1,6 +1,7 @@
 import * as assert from 'node:assert';
 import {
   MANAGED_DISTRO,
+  decodeWslOutput,
   parseWslList,
   parseWslToolReport,
   toWslPath,
@@ -44,5 +45,17 @@ describe('V4-3 wslHost (WSL2 lane pure helpers)', () => {
 
   it('exposes the managed distro name', () => {
     assert.strictEqual(MANAGED_DISTRO, 'het-fcpp');
+  });
+
+  it('decodes wsl.exe UTF-16LE output (NUL pairs, optional BOM)', () => {
+    // No BOM: every ASCII char is followed by a NUL byte (utf8-decoded).
+    assert.strictEqual(
+      decodeWslOutput('U\u0000b\u0000u\u0000n\u0000t\u0000u\u0000-\u00002\u00004\u0000.\u00000\u00004\u0000\r\u0000\n\u0000'),
+      'Ubuntu-24.04\r\n',
+    );
+    // BOM (0xFF 0xFE) becomes two replacement chars before the text.
+    assert.strictEqual(decodeWslOutput('\uFFFD\uFFFDU\u0000b\u0000'), 'Ub');
+    // Plain utf8 passes through untouched.
+    assert.strictEqual(decodeWslOutput('plain text'), 'plain text');
   });
 });
