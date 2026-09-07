@@ -2,6 +2,17 @@
 
 All notable changes follow [Conventional Commits](https://www.conventionalcommits.org/) + fcpp emoji superset.
 
+## [0.3.1] - 2026-09-07
+
+### Fixed
+
+- **覆盖率本地与 CI 语义对齐（V5-6，issue-2）**：车道 `CONAN_HOME` 由 `…/managed-env/conan2` 改为 `…/managed-env/.conan2`（旧缓存自动一次性迁移），使模板覆盖率步骤硬编码的 `…/.conan2/p/b/…` 过滤 glob 与 GitHub Action（`~/.conan2`）完全一致——此前车道本地覆盖率在 `lcov --extract` 处匹配不到任何记录而失败，在线 Action 却通过（本地 76.9% / 66.7% 与 CI 同源）。车道缺 `lcov/genhtml/gcov` 时免密 root 自愈安装（镜像 CI 的 `apt install lcov`）。
+- **覆盖率报告定位打通（issue-2）**：新增共享定位/解析模块（`coverage/report`）：先查 `test_package/test/export/coverage/coverage_report`（conan create 现场路径，车道与原生一致），再查项目 `coverage_report` 与 `build` 树、机器 `.conan2/p`；解析 genhtml 行/函数百分比。覆盖面板、chip「代码覆盖」行与新增 `het.openCoverageReport` 命令三处同源。
+- **环境/Conan 状态反映“实际使用的工具链”（issue-1）**：`getWslLaneStatus` 的 conan/cmake 改为报告**车道 venv**（构建真正使用的那份），不再报告发行版 base 里装了但扩展不用的 conan——此前 base 未装 conan 也能构建成功，显示却一直“缺 conan”；HUD 环境行同样按车道口径显示（不再因 Windows 侧无 conan 而显示红叉）。
+- **健康状态过期不再误导（issue-1）**：构建/测试/覆盖率/环境检查完成后强制重算体检（`ensureHealthCached(true)`），此前激活时的旧“conan 未就绪”会一直残留到手动重跑。
+- **webview 与 chip 完全同步（issue-3）**：新增 live 状态枢纽（`features/live`），chip 刷新即广播；体检明细面板改**单例 + 事件驱动**（去掉固定 700 ms 延时，重跑后即时刷新），覆盖率面板订阅同源刷新。
+- **悬停卡版式（issue-4）**：「状态」列只显示运行结果 + 打开结果/明细的**入口**（输出/测试结果/Doxygen/Sphinx/报告/明细）；所有执行动作归入「快捷操作」区（检查环境 / 构建并测试 / 构建文档 / 生成覆盖率 / 重新体检 / 完整监控卡）。
+
 ## [0.3.0] - 2026-09-07
 
 ### Added

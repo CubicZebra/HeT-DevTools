@@ -12,7 +12,16 @@ const projectModel = (over: Partial<ChipModel> = {}): ChipModel => ({
   ...over,
 });
 
-describe('statusChip V5-2 hover console', () => {
+/** The 项目/状态 table region (between the header and the quick-actions bar). */
+function tableRegion(tooltip: string): string {
+  const start = tooltip.indexOf('| 项目 | 状态 |');
+  const end = tooltip.indexOf('━━━ 快捷操作');
+  assert.ok(start > -1, 'table header present');
+  assert.ok(end > start, 'quick actions bar present after the table');
+  return tooltip.slice(start, end);
+}
+
+describe('statusChip V5-2/V5-6 hover console', () => {
   it('shows a compact project chip that opens the HUD on click', () => {
     const s = chipSpec(projectModel());
     assert.ok(s);
@@ -33,55 +42,85 @@ describe('statusChip V5-2 hover console', () => {
     }
   });
 
-  it('carries Copilot-style command links (click executes), still no new-project', () => {
+  it('V5-6: every execute action lives ONLY in the 快捷操作 bar (not in status cells)', () => {
     const s = chipSpec(projectModel())!;
-    assert.ok(s.tooltip.includes('command:het.test'), 'build row action');
-    assert.ok(s.tooltip.includes('command:het.envCheck'), 'env row action');
-    assert.ok(s.tooltip.includes('command:het.docs'), 'docs row action');
-    assert.ok(s.tooltip.includes('command:het.healthCheck'), 'health row rescore');
-    assert.ok(!s.tooltip.includes('het.newProject'));
-    // theme icons remain for the verify harness + real rendering
-    assert.ok(s.tooltip.includes('$('));
+    // The bar exists below the table with all six actions, each exactly once.
+    assert.ok(s.tooltip.includes('━━━ 快捷操作（点按即执行）━━━'));
+    const execute = [
+      ['command:het.envCheck', '检查环境'],
+      ['command:het.test', '构建并测试'],
+      ['command:het.docs', '构建文档'],
+      ['command:het.coverage', '生成覆盖率'],
+      ['command:het.healthCheck', '重新体检'],
+      ['command:het.chipOverview', '完整监控卡'],
+    ] as const;
+    for (const [link, label] of execute) {
+      assert.strictEqual(s.tooltip.split(link).length - 1, 1, `${label} appears exactly once (${link})`);
+      assert.ok(s.tooltip.indexOf(link) > s.tooltip.indexOf('━━━ 快捷操作'), `${label} link sits in the quick bar`);
+    }
+    // Status cells carry NO execution wording.
+    const table = tableRegion(s.tooltip);
+    for (const word of ['构建并测试', '检查环境', '生成覆盖率', '重新体检', '构建文档']) {
+      assert.ok(!table.includes(word), `status column must not show action "${word}"`);
+    }
   });
 
-  it('开发环境 row shows the env sample summary', () => {
-    const s = chipSpec(projectModel({ envSummary: 'WSL2 · Ubuntu-24.04 · conan Conan version 2.32.0' }))!;
-    assert.ok(s.tooltip.includes('WSL2 · Ubuntu-24.04'));
+  it('V5-6: status cells keep entry links for existing results', () => {
+    const fail = chipSpec(projectModel({ lastBuildOk: false, test: { passed: 4, failed: 3, skipped: 0 } }))!;
+    const table = tableRegion(fail.tooltip);
+    assert.ok(table.includes('❌ 失败'), 'build failure shown as result');
+    assert.ok(table.includes('command:het.openBuildOutput'), '输出 entry for the failed build');
+    assert.ok(table.includes('command:het.showTestResults'), '测试结果 entry for failed tests');
+    // doc artifacts remain entry links (open, not execute).
+    const ok = chipSpec(projectModel({ docs: 'ok', docsDoxygen: true, docsSphinx: true }))!;
+    const okTable = tableRegion(ok.tooltip);
+    assert.ok(okTable.includes('command:het.openDocsArtifact?%22doxygen%22'));
+    assert.ok(okTable.includes('command:het.openDocsArtifact?%22sphinx%22'));
   });
 
-  it('技术文档 row: none → 构建文档 · ok → Doxygen/Sphinx links · fail → 查看详情', () => {
+  it('开发环境 row shows the env sample summary (no action)', () => {
+    const s = chipSpec(projectModel({ envSummary: 'WSL2 · Ubuntu-24.04 · gcc-13 · conan 2.32.0' }))!;
+    assert.ok(s.tooltip.includes('WSL2 · Ubuntu-24.04 · gcc-13 · conan 2.32.0'));
+    assert.ok(!tableRegion(s.tooltip).includes('command:het.envCheck'));
+  });
+
+  it('技术文档 row: none → 未构建 · ok → Doxygen/Sphinx links · fail → 详情 entry', () => {
     const none = chipSpec(projectModel())!;
-    assert.ok(none.tooltip.includes('未构建'));
+    assert.ok(tableRegion(none.tooltip).includes('未构建'));
+    assert.ok(!tableRegion(none.tooltip).includes('command:het.docs'), '构建文档 only lives in the quick bar');
     const ok = chipSpec(projectModel({ docs: 'ok', docsDoxygen: true, docsSphinx: true }))!;
     assert.ok(ok.tooltip.includes('command:het.openDocsArtifact?%22doxygen%22'));
     assert.ok(ok.tooltip.includes('command:het.openDocsArtifact?%22sphinx%22'));
     const fail = chipSpec(projectModel({ docs: 'fail' }))!;
-    assert.ok(fail.tooltip.includes('❌ 失败'));
-    assert.ok(fail.tooltip.includes('command:het.docs'));
+    assert.ok(tableRegion(fail.tooltip).includes('❌ 失败'));
+    assert.ok(tableRegion(fail.tooltip).includes('command:het.docs'), '详情 entry opens the docs center');
   });
 
-  it('构建结果/测试中心 close the loop: failure offers jump links', () => {
-    const fail = chipSpec(projectModel({ lastBuildOk: false, test: { passed: 4, failed: 3, skipped: 0 } }))!;
-    assert.strictEqual(fail.color, 'statusBarItem.errorBackground');
-    assert.ok(fail.tooltip.includes('❌ 失败'));
-    assert.ok(fail.tooltip.includes('command:het.openBuildOutput'));
-    assert.ok(fail.tooltip.includes('command:het.showTestResults'));
-    const ok = chipSpec(projectModel({ lastBuildOk: true }))!;
-    assert.ok(!ok.tooltip.includes('command:het.openBuildOutput'));
+  it('代码覆盖 row: 未开启 / 未生成 / ✅ %+报告入口 (no 生成覆盖率 action)', () => {
+    const off = chipSpec(projectModel({ coverageEnabled: false }))!;
+    assert.ok(tableRegion(off.tooltip).includes('未开启（metadata 开关）'));
+    assert.ok(!tableRegion(off.tooltip).includes('command:het.coverage'));
+    const empty = chipSpec(projectModel({ coverageEnabled: true }))!;
+    assert.ok(tableRegion(empty.tooltip).includes('未生成'));
+    const done = chipSpec(projectModel({ coverageEnabled: true, coverageFound: true, coverageLine: 76.9, coverageFunc: 66.7 }))!;
+    const dt = tableRegion(done.tooltip);
+    assert.ok(dt.includes('✅ 行 76.9% · 函数 66.7%'));
+    assert.ok(dt.includes('command:het.openCoverageReport'), '报告 entry opens the generated report');
+    const bare = chipSpec(projectModel({ coverageEnabled: true, coverageFound: true, coverageLine: null, coverageFunc: null }))!;
+    assert.ok(tableRegion(bare.tooltip).includes('command:het.openCoverageReport'));
   });
 
-  it('💚 工程健康 (last row) stays minimal; gap labels live below the table', () => {
+  it('💚 工程健康 (last row) stays minimal; gap labels live below the table; 体检 only in the bar', () => {
     const good = chipSpec(projectModel({ healthVerdict: '良好', healthGaps: [] }))!;
     assert.ok(good.tooltip.includes('87/100 · 良好'));
     assert.ok(!good.tooltip.includes('het.healthReport'));
     assert.ok(!good.tooltip.includes('可提升'));
     const weak = chipSpec(projectModel({ health: 62, healthVerdict: '需改进', healthGaps: ['尚未构建', '覆盖率未开'] }))!;
     assert.ok(weak.tooltip.includes('62/100 · 需改进 · 2项'), 'row stays minimal with a gap count');
-    assert.ok(weak.tooltip.includes('command:het.healthCheck'), '体检 short link');
-    assert.ok(weak.tooltip.includes('command:het.healthReport'), '明细 short link when improvable');
-    // long labels go to a standalone hint paragraph, NOT inside the table cell
-    const healthRow = weak.tooltip.split('\n').find((l) => l.includes('💚 工程健康')) ?? '';
+    assert.ok(weak.tooltip.includes('command:het.healthReport'), '明细 entry when improvable');
+    const healthRow = tableRegion(weak.tooltip).split('\n').find((l) => l.includes('💚 工程健康')) ?? '';
     assert.ok(!healthRow.includes('尚未构建'), 'gap labels must not break the table cell');
+    assert.ok(!healthRow.includes('command:het.healthCheck'), '重新体检 must NOT be in the status cell');
     assert.ok(weak.tooltip.includes('可提升：尚未构建 · 覆盖率未开'));
   });
 

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { esc } from '../ui';
+import { onStateChange } from '../live';
 
 export interface CoverageState {
   /** Current project name ('' when none). */
@@ -28,9 +29,23 @@ export function showCoveragePanel(context: vscode.ExtensionContext, deps: Covera
   panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.png');
 
   const render = async (): Promise<void> => {
+    if (panelIsDisposed) {
+      return;
+    }
     const state = await deps.getState();
-    panel.webview.html = buildHtml(state);
+    if (!panelIsDisposed) {
+      panel.webview.html = buildHtml(state);
+    }
   };
+
+  // V5-6 (issue-3): stay byte-synced with the chip — any state change
+  // (build/test/coverage elsewhere) repaints this panel too.
+  let panelIsDisposed = false;
+  const unsubscribe = onStateChange(() => void render());
+  panel.onDidDispose(() => {
+    panelIsDisposed = true;
+    unsubscribe();
+  });
 
   panel.webview.onDidReceiveMessage(async (message: { type: string; enabled?: boolean }) => {
     if (message.type === 'toggle' && typeof message.enabled === 'boolean') {

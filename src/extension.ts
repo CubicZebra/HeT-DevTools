@@ -58,6 +58,8 @@ import { currentManagedStatus, managedGc, managedPrepare, managedRemove } from '
 import { getWslLaneStatus } from './features/env/wslProbe';
 import { runWslConanCreate, runWslDocs } from './features/env/wslLane';
 import { collectEnvSample, envConanFact } from './features/env/envSample';
+import { findCoverageReport, readCoveragePct } from './features/coverage/report';
+import { onStateChange, notifyStateChange } from './features/live';
 import { parseProjectToolchain } from './core/projectToolchain';
 import { getMacosLaneStatus } from './features/env/macosProbe';
 import { openHudPanel } from './features/hud/panel';
@@ -87,8 +89,12 @@ let lastHealth: { score: number; verdict: 'PASS' | 'WARN' | 'FAIL'; gaps: string
 let lastHealthReport: HealthReport | null = null;
 /** V5-2: last docs build outcome (技术文档 row). */
 let lastDocs: { ok: boolean; at: number } | null = null;
+/** V5-6: parsed coverage % from the located report (cached 30 s). */
+let coverageProbeCache: { at: number; found: boolean; line: number | null; func: number | null } | null = null;
 /** V5-2: short-lived env sample summary cache for the 开发环境 row. */
 let envSummaryCache: { at: number; summary: string } | null = null;
+/** V5-6: singleton 体检明细 panel (live-synced with the chip). */
+let healthPanel: vscode.WebviewPanel | undefined;
 let onboardingNotified = false;
 let lastChip: { text: string; tooltip: string; command?: string } | null = null;
 /** Timer id for the "hide chip for 5 minutes" snooze. */
@@ -793,16 +799,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void emitTemplateBehind();
     }),
     vscode.commands.registerCommand('het.healthCheck', () => {
+      // 重新体检 = 强制重跑 + 回写 chip（开放面板由「明细」入口负责）。
       void ensureHealthCached(true);
-      openDashboard(context);
     }),
     vscode.commands.registerCommand('het.envCheck', async () => {
       const ctx = contextRef;
+      // V5-6: fresh env sample — invalidate the summary cache AND the cached
+      // WSL lane probe so the check reflects reality (not a 60 s-old snapshot).
+      envSummaryCache = null;
+      await getWslLaneStatus(true).catch(() => null);
       const sample = ctx ? await collectEnvSample(ctx.globalStorageUri.fsPath).catch(() => null) : null;
       if (sample) {
         envSummaryCache = { at: Date.now(), summary: sample.summary };
       }
       await refreshChip();
+      void ensureHealthCached(true);
       if (sample && !quietHost()) {
         void vscode.window.showInformationMessage(`开发环境：${sample.summary}`);
       }
@@ -823,6 +834,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand('het.openBuildOutput', () => {
       channel?.show(true);
+    }),
+    vscode.commands.registerCommand('het.openCoverageReport', () => {
+      const root = currentProject?.root;
+      if (!root) {
+        return;
+      }
+      const found = findCoverageReport(root);
+      if (!found) {
+        void vscode.window.showWarningMessage('未找到覆盖率报告（请先开启 activate_code_coverage 并构建测覆盖率）。');
+        return;
+      }
+      void vscode.env.openExternal(vscode.Uri.file(found));
     }),
     vscode.commands.registerCommand('het.healthReport', () => showHealthReportPanel(context)),
     vscode.commands.registerCommand('het.getBuildOk', () => lastBuildOk ?? null),
@@ -1238,55 +1261,10 @@ function openTestgenPanel(context: vscode.ExtensionContext): void {
   });
 }
 
-/** Coverage view (G-06): enable flag + run coverage build + open report. */
+/** Coverage view (G-06): enable flag + run coverage build + open report.
+ *  V5-6 (issue-2/3): shares the report locator with the chip, reports the
+ *  outcome into module state (chip/health sync), heals the lane as needed. */
 function openCoveragePanel(context: vscode.ExtensionContext): void {
-  let reportCache = '';
-  let reportCacheTime = 0;
-
-  const locateReport = async (): Promise<string> => {
-    const root = currentProject?.root;
-    if (!root) {
-      return '';
-    }
-    if (reportCache && Date.now() - reportCacheTime < 30_000) {
-      return reportCache;
-    }
-    const { readdir } = await import('node:fs/promises');
-    const hits: string[] = [];
-    const walk = async (dir: string, depth: number): Promise<void> => {
-      if (depth > 6 || hits.length > 0) {
-        return;
-      }
-      let entries: { name: string; isDir: boolean }[] = [];
-      try {
-        const dirents = await readdir(dir, { withFileTypes: true });
-        entries = dirents.map((d) => ({ name: d.name, isDir: d.isDirectory() }));
-      } catch {
-        return;
-      }
-      if (entries.some((e) => e.name === 'index.html' && dir.endsWith('coverage_report'))) {
-        hits.push(join(dir, 'index.html'));
-        return;
-      }
-      for (const e of entries) {
-        if (e.isDir && !e.name.startsWith('.') && e.name !== 'node_modules') {
-          await walk(join(dir, e.name), depth + 1);
-        }
-      }
-    };
-    // fast path first: project-local build trees
-    await walk(join(root, 'build'), 0);
-    await walk(join(root, 'coverage_report'), 0);
-    if (hits.length === 0) {
-      // fallback: conan cache test-package build dirs
-      const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
-      await walk(join(home, '.conan2', 'p'), 0);
-    }
-    reportCache = hits[0] ?? '';
-    reportCacheTime = Date.now();
-    return reportCache;
-  };
-
   const getState = async (): Promise<CoverageState> => {
     const root = currentProject?.root;
     if (!root || !currentProject?.metadata) {
@@ -1296,7 +1274,7 @@ function openCoveragePanel(context: vscode.ExtensionContext): void {
     return {
       projectName: currentProject.metadata.name ?? '',
       enabled: meta.activate_code_coverage === true,
-      reportPath: await locateReport(),
+      reportPath: findCoverageReport(root),
     };
   };
 
@@ -1306,7 +1284,7 @@ function openCoveragePanel(context: vscode.ExtensionContext): void {
       return { ok: false, message: '未检测到 fcpp 项目。' };
     }
     const applied = await applyMetadataPatch(root, { activate_code_coverage: enabled }, { persist: true });
-    reportCache = '';
+    coverageProbeCache = null;
     if (applied.ok) {
       await refreshStatus();
       return { ok: true, message: enabled ? '已开启 activate_code_coverage。' : '已关闭 activate_code_coverage。' };
@@ -1327,16 +1305,20 @@ function openCoveragePanel(context: vscode.ExtensionContext): void {
     const issues = parseCompilerOutput(`${result.stdout}\n${result.stderr}`);
     mapIssues(issues, project.root);
     markBuildOutcome(result.ok);
-    reportCache = '';
-    const report = await locateReport();
+    emitCockpitEvent({ type: 'issue:summary', count: issues.length });
+    coverageProbeCache = null; // force a fresh locate + % parse
+    const report = findCoverageReport(project.root);
+    void refreshChip();
+    // V5-6: coverage changes the 工程健康 state — recompute it now (not stale).
+    void ensureHealthCached(true);
     if (!result.ok) {
-      return { ok: false, message: '覆盖率构建失败：请查看“问题”面板。' };
+      return { ok: false, message: '覆盖率构建失败：请查看“问题”面板（车道内需 lcov/genhtml，缺则自动安装）。' };
     }
     if (report) {
       void vscode.env.openExternal(vscode.Uri.file(report));
       return { ok: true, message: `覆盖率构建成功，报告已打开：${report}` };
     }
-    return { ok: false, message: '构建成功但未找到 coverage_report/index.html（MSVC 无法产出 gcov 报告，请用 g++/CI）。' };
+    return { ok: false, message: '构建成功但未找到 coverage_report/index.html（报告位于 test_package/test/export/coverage/coverage_report 或项目 coverage_report/）。' };
   };
 
   showCoveragePanel(context, { getState, toggle, runCoverage });
@@ -1519,21 +1501,38 @@ function openDocsPanel(context: vscode.ExtensionContext): void {  const locateAr
   showDocsPanel(context, { getState, runDocs, fixGraphviz, openArtifact });
 }
 
-/** V5-2: lightweight 体检明细 panel — every check with score, colour, detail. */
+/** V5-2/5-6: lightweight 体检明细 panel — every check with score, colour,
+ *  detail. V5-6 (issue-3): a SINGLE live instance that re-renders whenever
+ *  the chip state changes (ensureHealthCached → refreshChip →
+ *  notifyStateChange), so "重新体检" and any build/test/coverage outcome are
+ *  always byte-synced with the hover console — no fixed-delay hack. */
 function showHealthReportPanel(context: vscode.ExtensionContext): void {
-  const panel = vscode.window.createWebviewPanel(
+  if (healthPanel) {
+    healthPanel.reveal(vscode.ViewColumn.Active);
+    return;
+  }
+  healthPanel = vscode.window.createWebviewPanel(
     'het.healthReport',
     'HeT DevTools — 工程健康明细',
     vscode.ViewColumn.Active,
     { enableScripts: true, localResourceRoots: [context.extensionUri] },
   );
-  panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.png');
+  healthPanel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.png');
   const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  let busy = false;
+
   const render = (): void => {
+    const panel = healthPanel;
+    if (!panel) {
+      return;
+    }
     const r = lastHealthReport;
+    const busyNote = busy ? '<p style="opacity:.7">⏳ 体检中…（完成后自动刷新）</p>' : '';
     if (!r) {
       panel.webview.html =
-        '<body style="font-family:var(--vscode-font-family)"><h3>工程健康</h3><p>尚未体检 — 点击重新体检，或先在项目中构建/测试。</p><button id="rerun">重新体检</button>' +
+        '<body style="font-family:var(--vscode-font-family)"><h3>工程健康</h3><p>尚未体检 — 点击重新体检，或先在项目中构建/测试。</p>' +
+        busyNote +
+        '<button id="rerun">重新体检</button>' +
         '<script>const vscode=acquireVsCodeApi();document.getElementById("rerun").onclick=()=>vscode.postMessage({type:"rerun"});</script></body>';
       return;
     }
@@ -1553,14 +1552,26 @@ function showHealthReportPanel(context: vscode.ExtensionContext): void {
     panel.webview.html =
       '<body style="font-family:var(--vscode-font-family);padding:4px 12px">' +
       `<h3>工程健康：<span style="color:${tone}">${r.score}/100 · ${verdictZh(r.verdict)}</span></h3>` +
+      busyNote +
       rows +
       '<button id="rerun" style="margin-top:10px">重新体检</button>' +
       '<script>const vscode=acquireVsCodeApi();document.getElementById("rerun").onclick=()=>vscode.postMessage({type:"rerun"});</script></body>';
   };
-  panel.webview.onDidReceiveMessage((message: { type: string }) => {
+
+  // V5-6: re-render on every chip-state broadcast (single source of truth).
+  const unsubscribe = onStateChange(render);
+  healthPanel.onDidDispose(() => {
+    unsubscribe();
+    healthPanel = undefined;
+  });
+  healthPanel.webview.onDidReceiveMessage((message: { type: string }) => {
     if (message.type === 'rerun') {
-      void ensureHealthCached(true);
-      setTimeout(render, 700);
+      busy = true;
+      render();
+      void ensureHealthCached(true).then(() => {
+        busy = false;
+        render();
+      });
     }
   });
   render();
@@ -3087,6 +3098,17 @@ async function assembleHudModel(): Promise<HudModel> {
   const st = getCockpitState();
   const plan = await getCurrentProvisionPlan(true, provisionPrefs()).catch(() => null);
   const tools = await ensureToolDiscovery().catch(() => []);
+  // V5-6 (issue-1): under the WSL2 lane the rows must reflect the toolchain the
+  // extension ACTUALLY uses (lane venv conan/cmake/ninja/python), never the
+  // Windows-side sniff — a Windows box without local conan would otherwise show
+  // a red ✗ while builds succeed through the lane.
+  let lane: { conan?: string; cmake?: string; provisioned: boolean } | null = null;
+  if (process.platform === 'win32' && plan?.provider === 'win-wsl2') {
+    const wsl = await getWslLaneStatus(false).catch(() => null);
+    if (wsl?.tools.gcc) {
+      lane = { conan: wsl.tools.conan, cmake: wsl.tools.cmake, provisioned: !!wsl.tools.conan };
+    }
+  }
   const env: HudEnvRow[] = [];
   const wanted = new Set(['conan', 'cmake', 'python', 'ninja', 'gtest']);
   for (const t of tools) {
@@ -3094,15 +3116,30 @@ async function assembleHudModel(): Promise<HudModel> {
       continue;
     }
     const missing = t.source === 'missing';
-    const tone = missing ? (t.managed ? 'ok' : t.optional ? 'plain' : 'fail') : 'ok';
-    const value = missing
+    // Lane override: the used toolchain has it → ok, whatever Windows says.
+    const laneOk = lane !== null && (t.key === 'conan' || t.key === 'cmake' ? !!lane[t.key as 'conan' | 'cmake'] : lane.provisioned && (t.key === 'python' || t.key === 'ninja'));
+    let tone: HudEnvRow['tone'] = missing ? (t.managed ? 'ok' : t.optional ? 'plain' : 'fail') : 'ok';
+    let value = missing
       ? t.managed
         ? 'conan 托管（构建时获取）'
         : t.optional
           ? '可选（Linux/WSL 覆盖率）'
           : '未找到'
       : (t.sourceDetail || t.exe || t.source).slice(0, 60);
-    env.push({ label: t.label, value, tone: tone as HudEnvRow['tone'] });
+    if (laneOk) {
+      tone = 'ok';
+      value =
+        t.key === 'conan' && lane?.conan
+          ? `WSL2 车道 venv · ${lane.conan}`
+          : t.key === 'cmake' && lane?.cmake
+            ? `WSL2 车道 venv · ${lane.cmake}`
+            : t.key === 'python'
+              ? 'WSL2 车道 venv（托管）'
+              : t.key === 'ninja'
+                ? 'WSL2 车道 venv（托管）'
+                : value;
+    }
+    env.push({ label: t.label, value, tone });
   }
   return {
     title: currentProject?.metadata?.name ?? 'fcpp 项目',
@@ -3212,13 +3249,37 @@ async function currentEnvSummary(): Promise<string | null> {
   }
 }
 
+/** V5-6: cached coverage-report presence + line/function % for chip/panel. */
+async function probeCoverage(root?: string): Promise<{ found: boolean; line: number | null; func: number | null }> {
+  const none = { found: false, line: null, func: null };
+  if (!root) {
+    return none;
+  }
+  if (coverageProbeCache && Date.now() - coverageProbeCache.at < 30_000) {
+    return { found: coverageProbeCache.found, line: coverageProbeCache.line, func: coverageProbeCache.func };
+  }
+  try {
+    const report = findCoverageReport(root);
+    const pct = report ? readCoveragePct(report) : { line: null, func: null };
+    const found = report.length > 0;
+    coverageProbeCache = { at: Date.now(), found, line: pct.line, func: pct.func };
+    return { found, line: pct.line, func: pct.func };
+  } catch {
+    return none;
+  }
+}
+
 /** Push the latest model into the single status-bar chip (hide = invisible). */
 async function refreshChip(): Promise<void> {
   if (!statusItem) {
     return;
   }
   const st = getCockpitState();
-  const [envSummary, docsArt] = await Promise.all([currentEnvSummary(), probeDocsArtifacts(currentProject?.root)]);
+  const [envSummary, docsArt, cov] = await Promise.all([
+    currentEnvSummary(),
+    probeDocsArtifacts(currentProject?.root),
+    probeCoverage(currentProject?.root),
+  ]);
   const docs = docsRowState(docsArt, lastDocs);
   const spec = chipSpec({
     projectName: currentProject?.metadata?.name ?? '',
@@ -3238,12 +3299,16 @@ async function refreshChip(): Promise<void> {
     docsDoxygen: docs.doxygen,
     docsSphinx: docs.sphinx,
     coverageEnabled: currentProject?.metadata?.activate_code_coverage ?? null,
+    coverageFound: cov.found,
+    coverageLine: cov.line,
+    coverageFunc: cov.func,
     healthVerdict: lastHealth?.verdict ? verdictZh(lastHealth.verdict) : null,
     healthGaps: lastHealth?.gaps ?? null,
   });
   if (!spec) {
     statusItem.hide();
     lastChip = null;
+    notifyStateChange();
     return;
   }
   statusItem.text = spec.text;
@@ -3254,6 +3319,9 @@ async function refreshChip(): Promise<void> {
   statusItem.backgroundColor = spec.color ? new vscode.ThemeColor(spec.color) : undefined;
   statusItem.show();
   lastChip = { text: spec.text, tooltip: spec.tooltip, command: spec.command };
+  // V5-6 (issue-3): the chip is the single state funnel — broadcast so every
+  // open result panel (体检明细 / 覆盖率 / …) repaints in lockstep.
+  notifyStateChange();
 }
 
 /** V4-6: click the chip → Level-2 HUD card; disabled/automation → QuickPick. */
@@ -3450,6 +3518,10 @@ async function runConanOnce(project: FcppProject): Promise<{ ok: boolean; stdout
   // distro's conda base / FEniCS envs via its own venv + CONAN_HOME + profile).
   const isWin = process.platform === 'win32';
   const tc = await projectToolchainFor(project);
+  // V5-6: coverage-enabled recipes run geninfo inside the test package on every
+  // create — force-rebuild the project's own package so the captured .gcda
+  // always carry current absolute paths (matches the fresh-runner CI).
+  const forceSelf = project.metadata?.activate_code_coverage === true ? project.metadata.name : undefined;
   let wslDistro: string | null = null;
   if (isWin && tc !== 'system') {
     const plan = await getCurrentProvisionPlan(false, provisionPrefs()).catch(() => null);
@@ -3467,10 +3539,11 @@ async function runConanOnce(project: FcppProject): Promise<{ ok: boolean; stdout
     }
   }
   if (wslDistro) {
-    log(`[conan] WSL2 托管车道：distro=${wslDistro} · ${project.root}`);
+    log(`[conan] WSL2 托管车道：distro=${wslDistro} · ${project.root}${forceSelf ? ` forceSelf=${forceSelf}` : ''}`);
     emitCockpitEvent({ type: 'log:start', title: `conan create . (Debug) · WSL2 ${wslDistro}` });
     const summary = await runWslConanCreate(wslDistro, project.root, {
       buildType: 'Debug',
+      forceSelf,
       onStdout: (c) => {
         channel?.append(c);
         emitCockpitEvent({ type: 'log:append', line: c.replace(/\s+$/u, '') });
@@ -3554,6 +3627,8 @@ async function buildProject(): Promise<void> {
     maybeToast('error', `构建失败：${detail}`);
   }
   void refreshChip();
+  // V5-6: after a real run the lane is provisioned — re-grade health (env.conan).
+  void ensureHealthCached(true);
 }
 
 /**
@@ -3588,6 +3663,8 @@ async function executeTestRun(): Promise<{ ok: boolean; stdout: string; stderr: 
     `[test] ok=${result.ok} gtest=${JSON.stringify({ p: lastTestSummary.passed, f: lastTestSummary.failed, s: lastTestSummary.skipped })}`,
   );
   void refreshChip();
+  // V5-6: the lane may have been provisioned by this run — re-grade health now.
+  void ensureHealthCached(true);
   return result;
 }
 

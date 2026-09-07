@@ -24,10 +24,20 @@ export interface WslLaneLayout {
   marker: string;
 }
 
-/** Where the lane lives (always under `~/.het-fti/managed-env`). */
+/**
+ * Where the lane lives (always under `~/.het-fti/managed-env`).
+ *
+ * The conan home is deliberately named `.conan2` (not `conan2`): the fcpp
+ * template's coverage step hard-codes the cache layout glob ending in
+ * `/.conan2/p/b/…` (the GitHub CI default is `CONAN_HOME=~/.conan2`). A
+ * differently-named home
+ * (e.g. `…/conan2`) makes `lcov --extract` match nothing → local coverage
+ * fails while the online Action passes. Naming it `.conan2` keeps the lane
+ * byte-identical to CI semantics while still isolated under managed-env.
+ */
 export function wslLaneLayout(home: string): WslLaneLayout {
   const root = posix.join(home, '.het-fti', 'managed-env');
-  const conanHome = posix.join(root, 'conan2');
+  const conanHome = posix.join(root, '.conan2');
   const profilesDir = posix.join(conanHome, 'profiles');
   return {
     root,
@@ -71,6 +81,9 @@ export function wslLaneEnsureCommand(home: string, profileText: string): string 
   const steps = [
     'set -e',
     `DIR="${l.root}"`,
+    // One-time migration (V5-6): the conan home was `…/managed-env/conan2`;
+    // CI-parity coverage needs the literal `…/.conan2/…` cache layout.
+    `[ -d "${posix.join(l.root, 'conan2')}" ] && [ ! -d "${l.conanHome}" ] && mv "${posix.join(l.root, 'conan2')}" "${l.conanHome}"`,
     `mkdir -p "${l.profilesDir}"`,
     `if [ ! -x "${posix.join(venvBin, 'conan')}" ]; then`,
     '  PY=""',
@@ -97,17 +110,33 @@ export function wslLaneEnsureCommand(home: string, profileText: string): string 
   return steps.join('\n');
 }
 
-/** The `conan create` command inside the lane (runs from `cwdWsl`). */
-export function wslLaneBuildCommand(cwdWsl: string, home: string, buildType = 'Debug'): string {
+/**
+ * The `conan create` command inside the lane (runs from `cwdWsl`).
+ *
+ * `forceSelf` (V5-6): when a coverage-enabled project builds, the project's
+ * own cached package is REMOVED first (`conan remove <name>/* --confirm`),
+ * so conan rebuilds it from source with CURRENT absolute paths — exactly like
+ * the GitHub CI (a fresh runner + end-of-job `conan remove`). This avoids two
+ * real failure modes:
+ *   - after the one-time lane CONAN_HOME rename (…/conan2 → …/.conan2) conan
+ *     would otherwise reuse the pre-rename build whose .gcda embed
+ *     moved-away paths → geninfo cannot open dependency headers;
+ *   - the template's coverage step copies .gcda from the FIRST `conan list`
+ *     package id — with multiple stale binaries it can pick the wrong one.
+ */
+export function wslLaneBuildCommand(cwdWsl: string, home: string, buildType = 'Debug', forceSelf?: string): string {
   const l = wslLaneLayout(home);
-  return [
+  const lines = [
     'set -o pipefail',
     `export PATH="${posix.join(l.venv, 'bin')}:$PATH"`,
     `export CONAN_HOME="${l.conanHome}"`,
     'unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_PROMPT_MODIFIER 2>/dev/null || true',
-    `cd "${cwdWsl}"`,
-    `conan create . -s build_type=${buildType} --build=missing`,
-  ].join('\n');
+  ];
+  if (forceSelf) {
+    lines.push(`conan remove "${forceSelf}/*" --confirm || true`);
+  }
+  lines.push(`cd "${cwdWsl}"`, `conan create . -s build_type=${buildType} --build=missing`);
+  return lines.join('\n');
 }
 
 /** V5-4: pip packages for the docs stack (loose pins, per the manifest). */

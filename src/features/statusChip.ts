@@ -43,6 +43,10 @@ export interface ChipModel {
   docsSphinx?: boolean;
   /** V5-2: 代码覆盖 row — metadata switch state. */
   coverageEnabled?: boolean | null;
+  /** V5-6: 代码覆盖 row — report presence + parsed line/function % (result). */
+  coverageFound?: boolean;
+  coverageLine?: number | null;
+  coverageFunc?: number | null;
   /** V5-2: 💚 工程健康 row (score + verdict + ≤3 short gaps). */
   healthVerdict?: string | null;
   healthGaps?: string[] | null;
@@ -71,10 +75,17 @@ export function cmdLink(label: string, command: string, arg?: string): string {
   return `[${label}](${target})`;
 }
 
+/**
+ * V5-6 closed-loop layout (issue-4 feedback):
+ *  - the "状态" column shows ONLY the outcome (result) of the last run, plus
+ *    entry links that OPEN that result (输出 / 测试结果 / Doxygen / Sphinx /
+ *    报告 / 明细) — never a button that STARTS an action;
+ *  - every action that executes something lives in the "快捷操作" row below
+ *    the table (检查环境 / 构建并测试 / 构建文档 / 生成覆盖率 / 重新体检).
+ */
 function envCell(m: ChipModel): string {
   const summary = (m.envSummary ?? '').trim();
-  const base = summary.length > 0 ? summary : '未检测';
-  return `${base} · ${cmdLink('检查', 'het.envCheck')}`;
+  return summary.length > 0 ? summary : '未检测';
 }
 
 function buildCell(m: ChipModel): string {
@@ -82,11 +93,11 @@ function buildCell(m: ChipModel): string {
   const ago = ok && m.buildAgo ? ` · ${m.buildAgo}` : '';
   const type = ok && m.buildType ? ` · ${m.buildType}` : '';
   if (ok === null) {
-    return `未运行 · ${cmdLink('构建并测试', 'het.test')}`;
+    return '未运行';
   }
   const head = ok ? `✅ 成功${type}${ago}` : '❌ 失败';
-  const extra = ok ? '' : ` · ${cmdLink('输出', 'het.openBuildOutput')}`;
-  return `${head}${extra} · ${cmdLink('构建并测试', 'het.test')}`;
+  // 失败 = 结果 + 入口（打开输出/问题）；不在此处放「构建」动作。
+  return ok ? head : `${head} · ${cmdLink('输出', 'het.openBuildOutput')}`;
 }
 
 function testCell(m: ChipModel): string {
@@ -96,7 +107,8 @@ function testCell(m: ChipModel): string {
   }
   const ok = t.failed === 0;
   const line = `${ok ? '✅' : '❌'} 通过 ${t.passed} · 失败 ${t.failed} · 跳过 ${t.skipped}`;
-  return ok ? line : `${line} · ${cmdLink('查看测试结果', 'het.showTestResults')}`;
+  // 失败时给「测试结果」入口（查看明细），动作统一在快捷操作区。
+  return ok ? line : `${line} · ${cmdLink('测试结果', 'het.showTestResults')}`;
 }
 
 function docsCell(m: ChipModel): string {
@@ -115,16 +127,23 @@ function docsCell(m: ChipModel): string {
     return links.length ? `✅ 成功 · ${links.join(' ')}` : '✅ 成功（产物未找到）';
   }
   if (state === 'fail') {
-    return `❌ 失败 · ${cmdLink('查看详情', 'het.docs')}`;
+    return `❌ 失败 · ${cmdLink('详情', 'het.docs')}`;
   }
-  return `未构建 · ${cmdLink('构建文档', 'het.docs')}`;
+  return '未构建';
 }
 
 function coverageCell(m: ChipModel): string {
-  const pct = m.coverage === null || m.coverage === undefined ? '' : `行 ${m.coverage}%`;
-  const switchTxt = m.coverageEnabled === false ? '未开启' : pct || '未生成';
-  const lead = pct && m.coverageEnabled === false ? `${pct}（开关关）` : switchTxt;
-  return `${lead} · ${cmdLink('生成覆盖率', 'het.coverage')}`;
+  if (m.coverageEnabled === false) {
+    return '未开启（metadata 开关）';
+  }
+  const found = m.coverageFound === true;
+  if (found) {
+    const pct = m.coverageLine !== null && m.coverageLine !== undefined
+      ? `行 ${m.coverageLine}%${m.coverageFunc !== null && m.coverageFunc !== undefined ? ` · 函数 ${m.coverageFunc}%` : ''} · `
+      : '';
+    return `✅ ${pct}${cmdLink('报告', 'het.openCoverageReport')}`;
+  }
+  return '未生成';
 }
 
 function templateCell(m: ChipModel): string {
@@ -134,9 +153,9 @@ function templateCell(m: ChipModel): string {
 function healthCell(m: ChipModel): string {
   const base = m.health === null ? '未体检' : `${m.health}/100 · ${m.healthVerdict ?? '—'}`;
   const count = (m.healthGaps ?? []).length;
-  const rescore = cmdLink('体检', 'het.healthCheck');
-  // 极简：长文案（可提升项标签）走表格下方 hint，不进单元格以免撑破列宽。
-  return count === 0 ? `${base} · ${rescore}` : `${base} · ${count}项 · ${rescore} · ${cmdLink('明细', 'het.healthReport')}`;
+  // 极简：长文案（可提升项标签）走表格下方 hint，不进单元格以免撑破列宽；
+  // 「重新体检」是动作 → 只留在快捷操作区，这里保留「明细」入口。
+  return count === 0 ? base : `${base} · ${count}项 · ${cmdLink('明细', 'het.healthReport')}`;
 }
 
 /** 可提升项提示（独立段落，避免破坏表格格式）。 */
@@ -179,6 +198,14 @@ export function chipSpec(m: ChipModel): ChipSpec | null {
   const table = ['| 项目 | 状态 |', '| --- | --- |', ...rows.map(([k, v]) => `| ${k} | ${v} |`)].join('\n');
   const runningLine = m.running && m.running !== 'env' ? `\n\n$(sync~spin) 运行中：${m.running}` : '';
 
+  // V5-6 (issue-4): every EXECUTE action lives here — the status cells above
+  // only show results + entry links. Order locked: env check 1st, build+test 2nd.
+  const quick = [
+    '━━━ 快捷操作（点按即执行）━━━',
+    [cmdLink('🔧 检查环境', 'het.envCheck'), cmdLink('🚀 构建并测试', 'het.test'), cmdLink('📚 构建文档', 'het.docs')].join(' '),
+    [cmdLink('📊 生成覆盖率', 'het.coverage'), cmdLink('💚 重新体检', 'het.healthCheck'), cmdLink('🖥️ 完整监控卡', 'het.chipOverview')].join(' '),
+  ].join('\n');
+
   const tooltip = [
     `**$(package) HeT DevTools · ${m.projectName}**`,
     '',
@@ -188,7 +215,9 @@ export function chipSpec(m: ChipModel): ChipSpec | null {
     runningLine,
     healthHint(m),
     '',
-    '$(keyboard) Enter 打开完整监控卡 · 悬停操作点击即执行 · $(eye) 可隐藏监控 chip',
+    quick,
+    '',
+    '$(keyboard) Enter 打开完整监控卡 · 悬停链接点击即执行 · $(eye) 可隐藏监控 chip',
   ].join('\n');
 
   return {

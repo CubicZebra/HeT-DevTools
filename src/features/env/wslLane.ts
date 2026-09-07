@@ -72,6 +72,13 @@ export async function laneConanPresent(distro: string): Promise<boolean> {
   }
 }
 
+/** Quiet, idempotent root apt install of one or more packages (no conda). */
+async function rootApt(distro: string, ...pkgs: string[]): Promise<void> {
+  await run('wsl.exe', ['-d', distro, '-u', 'root', '--', 'bash', '-lc',
+    `export DEBIAN_FRONTEND=noninteractive; apt-get update -qq >/dev/null 2>&1 || true; apt-get install -y -qq ${pkgs.join(' ')} >/dev/null 2>&1 || true`,
+  ], { timeoutMs: 15 * 60_000 });
+}
+
 /**
  * Idempotent bootstrap of the isolated lane. Cached 60 s (provisioning is
  * slow only the first time; afterwards it is a few `test -x`/`cat` calls).
@@ -98,9 +105,18 @@ export async function ensureWslLane(distro: string): Promise<WslLaneEnsureResult
   // one-time, system-wide apt install of python3-venv fixes it WITHOUT
   // touching any conda env; then retry the user-level bootstrap.
   if (r.code === 3) {
+    await rootApt(distro, 'python3-venv');
+    r = await runEnsure();
+  }
+  // V5-6 coverage self-heal: `conan create` with activate_code_coverage=true
+  // runs lcov+genhtml inside the test package (mirror of the GitHub Action's
+  // `sudo apt install lcov`). When the lane report shows lcov missing, install
+  // it (root, quiet) and make `gcov` resolve to gcc-13's tool, then re-report.
+  if (r.code === 0 && /lane_lcov:-\s*$/m.test(`${r.stdout}\n`)) {
+    await rootApt(distro, 'lcov');
     await run('wsl.exe', ['-d', distro, '-u', 'root', '--', 'bash', '-lc',
-      'export DEBIAN_FRONTEND=noninteractive; apt-get update -qq >/dev/null 2>&1 || true; apt-get install -y -qq python3-venv >/dev/null 2>&1 || true',
-    ], { timeoutMs: 15 * 60_000 });
+      'if [ -x /usr/bin/gcov-13 ] && [ ! -x /usr/bin/gcov ]; then ln -sf /usr/bin/gcov-13 /usr/bin/gcov; fi',
+    ], { timeoutMs: 30_000 });
     r = await runEnsure();
   }
   if (r.code !== 0) {
@@ -120,6 +136,8 @@ export async function runWslConanCreate(
   cwdWin: string,
   opts: {
     buildType?: 'Debug' | 'Release';
+    /** V5-6: force-rebuild the project's own recipe (coverage-enabled runs). */
+    forceSelf?: string;
     onStdout?: (chunk: string) => void;
     onStderr?: (chunk: string) => void;
     timeoutMs?: number;
@@ -127,7 +145,7 @@ export async function runWslConanCreate(
 ): Promise<BuildSummary> {
   const { home } = await ensureWslLane(distro);
   const cwdWsl = toWslPath(cwdWin);
-  const cmd = wslLaneBuildCommand(cwdWsl, home, opts.buildType ?? 'Debug');
+  const cmd = wslLaneBuildCommand(cwdWsl, home, opts.buildType ?? 'Debug', opts.forceSelf);
   const tmp = writeWslTempScript(cmd);
   let stdout = '';
   let stderr = '';

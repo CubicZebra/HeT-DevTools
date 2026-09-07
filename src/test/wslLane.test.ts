@@ -12,13 +12,15 @@ import {
 } from '../core/wslLane';
 
 describe('V5-1 wslLane (WSL2 managed build lane pure helpers)', () => {
-  it('keeps everything under ~/.het-fti/managed-env', () => {
+  it('keeps everything under ~/.het-fti/managed-env; conan home is .conan2 (CI parity)', () => {
     const l = wslLaneLayout('/home/chen');
     assert.strictEqual(l.root, '/home/chen/.het-fti/managed-env');
     assert.strictEqual(l.venv, '/home/chen/.het-fti/managed-env/venv');
-    assert.strictEqual(l.conanHome, '/home/chen/.het-fti/managed-env/conan2');
-    assert.strictEqual(l.profilesDir, '/home/chen/.het-fti/managed-env/conan2/profiles');
-    assert.strictEqual(l.profile, '/home/chen/.het-fti/managed-env/conan2/profiles/default');
+    // V5-6: named .conan2 so the template's hard-coded `*/.conan2/p/b/…`
+    // coverage glob matches exactly like GitHub CI (CONAN_HOME=~/.conan2).
+    assert.strictEqual(l.conanHome, '/home/chen/.het-fti/managed-env/.conan2');
+    assert.strictEqual(l.profilesDir, '/home/chen/.het-fti/managed-env/.conan2/profiles');
+    assert.strictEqual(l.profile, '/home/chen/.het-fti/managed-env/.conan2/profiles/default');
   });
 
   it('generates a pinned gcc 13 profile (never detected)', () => {
@@ -36,7 +38,10 @@ describe('V5-1 wslLane (WSL2 managed build lane pure helpers)', () => {
 
   it('ensure command is idempotent: venv + pip pin + profile heredoc + CONAN_HOME marker', () => {
     const c = wslLaneEnsureCommand('/home/chen', wslLaneProfile('Release'));
-    assert.ok(c.includes('/home/chen/.het-fti/managed-env/conan2/profiles'));
+    assert.ok(c.includes('/home/chen/.het-fti/managed-env/.conan2/profiles'));
+    // V5-6: one-time migration of the pre-.conan2 cache layout (keeps it warm)
+    assert.ok(c.includes('mv '), 'migrates an existing legacy conan2 cache');
+    assert.ok(c.includes('conan2"') && c.includes('.conan2'), 'migration src→dst present');
     assert.ok(c.includes('"conan>=2.0,<3"'));
     assert.ok(c.includes('"cmake>=4.0,<5"'));
     assert.ok(c.includes('"ninja>=1.11"'));
@@ -54,10 +59,20 @@ describe('V5-1 wslLane (WSL2 managed build lane pure helpers)', () => {
   it('build command isolates PATH + CONAN_HOME and runs the canonical conan create', () => {
     const c = wslLaneBuildCommand('/mnt/c/proj/src', '/home/chen', 'Debug');
     assert.ok(c.includes('export PATH="/home/chen/.het-fti/managed-env/venv/bin:$PATH"'));
-    assert.ok(c.includes('export CONAN_HOME="/home/chen/.het-fti/managed-env/conan2"'));
+    assert.ok(c.includes('export CONAN_HOME="/home/chen/.het-fti/managed-env/.conan2"'));
     assert.ok(c.includes('unset CONDA_PREFIX CONDA_DEFAULT_ENV'));
     assert.ok(c.includes('cd "/mnt/c/proj/src"'));
     assert.ok(c.includes('conan create . -s build_type=Debug --build=missing'));
+  });
+
+  it('forceSelf removes the cached package first (coverage CI parity), plain builds stay untouched', () => {
+    const plain = wslLaneBuildCommand('/mnt/c/proj', '/home/chen', 'Debug');
+    assert.ok(plain.includes('conan create . -s build_type=Debug --build=missing'));
+    assert.ok(!plain.includes('conan remove'), 'plain build must not remove the cache');
+    const forced = wslLaneBuildCommand('/mnt/c/proj', '/home/chen', 'Debug', 'verify1');
+    assert.ok(forced.includes('conan remove "verify1/*" --confirm || true'), 'coverage run removes its own package first');
+    assert.ok(forced.indexOf('conan remove') < forced.indexOf('conan create .'), 'remove runs before create');
+    assert.ok(forced.includes('conan create . -s build_type=Debug --build=missing'));
   });
 
   it('wslOutToWin maps /mnt/<drive>/ back to Windows drive paths and leaves others', () => {
