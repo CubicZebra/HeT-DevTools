@@ -133,10 +133,19 @@ function templateCell(m: ChipModel): string {
 
 function healthCell(m: ChipModel): string {
   const base = m.health === null ? '未体检' : `${m.health}/100 · ${m.healthVerdict ?? '—'}`;
+  const count = (m.healthGaps ?? []).length;
+  const rescore = cmdLink('体检', 'het.healthCheck');
+  // 极简：长文案（可提升项标签）走表格下方 hint，不进单元格以免撑破列宽。
+  return count === 0 ? `${base} · ${rescore}` : `${base} · ${count}项 · ${rescore} · ${cmdLink('明细', 'het.healthReport')}`;
+}
+
+/** 可提升项提示（独立段落，避免破坏表格格式）。 */
+function healthHint(m: ChipModel): string {
   const gaps = (m.healthGaps ?? []).slice(0, 3);
-  const gapTxt = gaps.length ? ` · 可提升：${gaps.join('、')}` : '';
-  const detail = gaps.length ? ` · ${cmdLink('查看详情', 'het.healthReport')}` : '';
-  return `${base}${gapTxt} · ${cmdLink('重新体检', 'het.healthCheck')}${detail}`;
+  if (!gaps.length) {
+    return '';
+  }
+  return `\n\n> 可提升：${gaps.join(' · ')} — 点「明细」查看完整体检`;
 }
 
 /** Render the chip only while a project is open — monitoring only. */
@@ -177,6 +186,7 @@ export function chipSpec(m: ChipModel): ChipSpec | null {
     '',
     table,
     runningLine,
+    healthHint(m),
     '',
     '$(keyboard) Enter 打开完整监控卡 · 悬停操作点击即执行 · $(eye) 可隐藏监控 chip',
   ].join('\n');

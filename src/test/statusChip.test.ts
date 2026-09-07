@@ -70,14 +70,19 @@ describe('statusChip V5-2 hover console', () => {
     assert.ok(!ok.tooltip.includes('command:het.openBuildOutput'));
   });
 
-  it('💚 工程健康 (last row) shows verdict, ≤3 gaps and 查看详情 when improvable', () => {
+  it('💚 工程健康 (last row) stays minimal; gap labels live below the table', () => {
     const good = chipSpec(projectModel({ healthVerdict: '良好', healthGaps: [] }))!;
     assert.ok(good.tooltip.includes('87/100 · 良好'));
     assert.ok(!good.tooltip.includes('het.healthReport'));
+    assert.ok(!good.tooltip.includes('可提升'));
     const weak = chipSpec(projectModel({ health: 62, healthVerdict: '需改进', healthGaps: ['尚未构建', '覆盖率未开'] }))!;
-    assert.ok(weak.tooltip.includes('62/100 · 需改进'));
-    assert.ok(weak.tooltip.includes('可提升：尚未构建、覆盖率未开'));
-    assert.ok(weak.tooltip.includes('command:het.healthReport'));
+    assert.ok(weak.tooltip.includes('62/100 · 需改进 · 2项'), 'row stays minimal with a gap count');
+    assert.ok(weak.tooltip.includes('command:het.healthCheck'), '体检 short link');
+    assert.ok(weak.tooltip.includes('command:het.healthReport'), '明细 short link when improvable');
+    // long labels go to a standalone hint paragraph, NOT inside the table cell
+    const healthRow = weak.tooltip.split('\n').find((l) => l.includes('💚 工程健康')) ?? '';
+    assert.ok(!healthRow.includes('尚未构建'), 'gap labels must not break the table cell');
+    assert.ok(weak.tooltip.includes('可提升：尚未构建 · 覆盖率未开'));
   });
 
   it('模板同步 row reports behind state with fcpp-native 📖 glyph', () => {

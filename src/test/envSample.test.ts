@@ -10,7 +10,7 @@ describe('V5-2B envSample (single environment sample)', () => {
       managed: null,
       osx: null,
     });
-    assert.strictEqual(s, 'WSL2 · Ubuntu-24.04 · conan Conan version 2.32.0 · gcc gcc-13');
+    assert.strictEqual(s, 'WSL2 · Ubuntu-24.04 · gcc-13 · conan 2.32.0');
   });
 
   it('summarises a ready managed env', () => {

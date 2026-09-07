@@ -28,7 +28,23 @@ export interface EnvSample {
   summary: string;
 }
 
-/** Compact human line from a sample (pure — unit tested). */
+/** First dotted version number (e.g. 'Conan version 2.32.0' → '2.32.0'). */
+function versionNum(s: string | undefined): string | null {
+  if (!s) {
+    return null;
+  }
+  return /(\d+(?:\.\d+)+)/u.exec(s)?.[1] ?? null;
+}
+
+/** Short gcc token: prefer 'gcc-13', else its dotted version. */
+function gccShort(s: string | undefined): string | null {
+  if (!s) {
+    return null;
+  }
+  return (/(gcc-\d+)/u.exec(s) ?? /(\d+(?:\.\d+)+)/u.exec(s))?.[1] ?? null;
+}
+
+/** Compact human line from a sample (pure — unit tested, kept SHORT). */
 export function envSummaryOf(s: Pick<EnvSample, 'providerId' | 'providerLabel' | 'wsl' | 'managed' | 'osx'>): string {
   const wslTools = s.wsl?.tools ?? {};
   if (s.wsl?.ready) {
@@ -36,17 +52,21 @@ export function envSummaryOf(s: Pick<EnvSample, 'providerId' | 'providerLabel' |
     if (s.wsl.distro) {
       bits.push(s.wsl.distro);
     }
-    if (wslTools.conan) {
-      bits.push(`conan ${wslTools.conan}`);
+    const gcc = gccShort(wslTools.gcc);
+    if (gcc) {
+      bits.push(gcc.startsWith('gcc-') ? gcc : `gcc ${gcc}`);
     }
-    if (wslTools.gcc) {
-      bits.push(`gcc ${wslTools.gcc.split(' ')[0]}`);
+    const conan = versionNum(wslTools.conan);
+    if (conan) {
+      bits.push(`conan ${conan}`);
     }
     return bits.join(' · ');
   }
   if (s.managed && s.managed.state === 'ready') {
     const t = s.managed.tools;
-    return `托管环境${t.conan ? ` · conan ${t.conan}` : ''}${t.cmake ? ` · cmake ${t.cmake}` : ''}`;
+    const conan = versionNum(t.conan);
+    const cmake = versionNum(t.cmake);
+    return `托管环境${conan ? ` · conan ${conan}` : ''}${cmake ? ` · cmake ${cmake}` : ''}`;
   }
   if (s.osx && s.osx.clt) {
     return `macOS · CLT${s.osx.clangVersion ? ` · clang ${s.osx.clangVersion}` : ''}`;
