@@ -2,6 +2,19 @@
 
 All notable changes follow [Conventional Commits](https://www.conventionalcommits.org/) + fcpp emoji superset.
 
+## [0.1.1] - 2026-09-07
+
+### Added
+
+- **环境初始化器（V4）**：宿主能力探测（Linux/macOS/WSL2/MinGW/MSVC）、托管环境 managed-env（Python venv + conan/cmake/ninja + CONAN_HOME + 标记文件）、WSL2 车道（含托管发行版引导）、macOS 车道（CLT + llvm-cov）、环境页（准备/移除按钮）。
+- **监控卡（V4-6）**：HUD 总览（状态卡 + 10 快捷动作 + 1-9 键盘）、状态栏芯片两栏表格 tooltip + gitmoji 徽标条、Snooze / 隐藏 HUD。
+- **零人工验收矩阵（V4-7）**：`verify-installed` 四阶段（empty/proj/matrix/scrub）+ 心跳看门狗 + 零通知宿主。
+- **卸载语义（V4-8）**：激活时托管环境 GC、项目工具链 `managed|system` 标记、新项目默认 managed、`het.envGc` / `het.envRemove` 命令。
+
+### Fixed
+
+- 版本号 0.1.0 → 0.1.1：修复同版本覆盖安装不生效（VS Code 不更新同版本扩展）导致旧版 UI/环境页残留的问题。
+
 ## [0.1.0] - 2026-09-03
 
 ### Added

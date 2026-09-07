@@ -1,7 +1,7 @@
 // Zero-manual verification of the INSTALLED het-devtools vsix.
 //
-//   1. Installs het-devtools-0.1.0.vsix into an isolated extensions dir of a
-//      downloaded VS Code copy (out/code-test) — no human action at all.
+//   1. Installs the packaged het-devtools vsix into an isolated extensions dir
+//      of a downloaded VS Code copy (out/code-test) — no human action at all.
 //   2. Bundles a tiny "verify runner" extension (id het-verify-runner) that
 //      does NOT contain het-devtools, so the only het extension present is the
 //      installed one.
@@ -13,13 +13,17 @@ import { build } from 'esbuild';
 import { runTests } from '@vscode/test-electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const codeDir = join(root, 'out', 'code-test', 'vscode-win32-x64-archive-1.136.1');
 const codeExe = join(codeDir, 'Code.exe');
-const vsix = join(root, 'het-devtools-0.1.0.vsix');
+// Read the version from package.json so version bumps (e.g. 0.1.0 -> 0.1.1)
+// never desync the vsix filename / installed extension dir used here.
+const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+const version = pkg.version;
+const vsix = join(root, `het-devtools-${version}.vsix`);
 
 const runnerDir = join(root, 'out', 'verifyRunner');
 const extDir = join(root, 'out', 'verify-ext');
@@ -70,7 +74,7 @@ mkdirSync(tmp, { recursive: true });
 mkdirSync(emptyWs, { recursive: true });
 rmSync(proj, { recursive: true, force: true });
 execFileSync('tar', ['-xf', vsix, '-C', tmp], { stdio: 'pipe' });
-const installed = join(extDir, 'het-fti.het-devtools-0.1.0');
+const installed = join(extDir, `het-fti.het-devtools-${version}`);
 cpSync(join(tmp, 'extension'), installed, { recursive: true });
 rmSync(tmp, { recursive: true, force: true });
 if (!existsSync(join(installed, 'assets', 'template', 'metadata.json'))) {
