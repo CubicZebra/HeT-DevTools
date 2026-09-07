@@ -70,6 +70,17 @@ describe('healthCheck', () => {
     assert.notStrictEqual(report.verdict, 'FAIL');
   });
 
+  it('lane env fact overrides which-sniffing for the conan rule', async () => {
+    const ready = await runHealthCheck({ project: project(meta()), tools: {}, env: { conan: true } });
+    assert.strictEqual(ready.checks.find((c) => c.id === 'env.conan')?.kind, 'ok');
+    assert.ok(ready.checks.find((c) => c.id === 'env.conan')?.detail.includes('托管车道'));
+    const missing = await runHealthCheck({ project: project(meta()), tools: {}, env: { conan: false } });
+    assert.strictEqual(missing.checks.find((c) => c.id === 'env.conan')?.kind, 'fail');
+    // absent env fact → fall back to tools sniffing
+    const sniffed = await runHealthCheck({ project: project(meta()), tools: {}, env: undefined });
+    assert.strictEqual(sniffed.checks.find((c) => c.id === 'env.conan')?.kind, 'fail');
+  });
+
   it('weights sum to 100', async () => {
     const report = await runHealthCheck({ project: project(meta()) });
     const sum = report.checks.reduce((a, c) => a + c.weight, 0);

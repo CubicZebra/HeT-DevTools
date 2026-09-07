@@ -130,20 +130,15 @@ describe('cockpit.render', () => {
     assert.ok(collapsed.drawer.includes('日志 · 问题 · 向导'));
   });
 
-  it('renders overview page content with health, tools and primary actions', () => {
+  it('renders overview page content with health, recent runs and primary actions', () => {
     const html = buildPageContentHtml('overview', {
       projectName: 'mylib',
       healthScore: 91,
-      tools: [
-        { name: 'conan', ok: true },
-        { name: 'doxygen', ok: false },
-      ],
+      tools: [],
       lastBuildOk: true,
       lastTest: { passed: 7, failed: 0, skipped: 1 },
     });
     assert.ok(html.includes('健康分 91'));
-    assert.ok(html.includes('✓ conan'));
-    assert.ok(html.includes('✗ doxygen'));
     assert.ok(html.includes('data-cmd="het.test"'));
     assert.ok(html.includes('codicon-play'));
   });
@@ -314,17 +309,15 @@ describe('cockpit.polish (P-G5)', () => {
     assert.ok(html.includes('&lt;img'));
     assert.ok(!html.includes('<img'));
   });
-  it('overview renders tools with ✓/✗ status marks', () => {
+  it('overview no longer dumps generic sniffed tool chips or runtime line (V5-2B)', () => {
     const html = buildPageContentHtml('overview', {
-      tools: [
-        { name: 'conan', ok: true },
-        { name: 'cmake', ok: false },
-      ],
+      tools: [{ name: 'conan', ok: true }],
       lastBuildOk: null,
       lastTest: null,
+      runtime: { version: 'Conan 2.16.1', envName: 'build' },
     });
-    assert.ok(html.includes('✓ conan'));
-    assert.ok(html.includes('✗ cmake'));
+    assert.ok(!html.includes('✓ conan'));
+    assert.ok(!html.includes('构建运行时'));
   });
   it('buildTest page reports the no-run state', () => {
     const html = buildPageContentHtml('buildTest', { lastBuildOk: null, lastTest: null });
@@ -339,33 +332,20 @@ describe('cockpit.polish (P-G5)', () => {
     assert.ok(!/codicon/.test(beforeAction));
     assert.ok(html.includes('codicon-new-file'));
   });
-  it('overview renders the sniffed conan runtime line', () => {
-    const html = buildPageContentHtml('overview', {
-      tools: [],
-      lastBuildOk: null,
-      lastTest: null,
-      runtime: { version: 'Conan 2.16.1', envName: 'build' },
-    });
-    assert.ok(html.includes('构建运行时'));
-    assert.ok(html.includes('Conan 2.16.1'));
-    assert.ok(html.includes('conda env build'));
-    const missing = buildPageContentHtml('overview', { tools: [], lastBuildOk: null, lastTest: null, runtime: null });
-    assert.ok(missing.includes('未找到 conan'));
-  });
-  it('overview renders the env/toolchain block with manual-override rows', () => {
+  it('overview renders the manual-override block only (V5-2B, no sniff dump)', () => {
     const html = buildPageContentHtml('overview', {
       tools: [],
       lastBuildOk: null,
       lastTest: null,
       envRows: [
-        { key: 'doxygen', label: 'Doxygen', exe: 'C:/x/doxygen.exe', source: 'conda', sourceDetail: 'conda env build', overridden: false },
-        { key: 'graphviz', label: 'Graphviz (dot)', exe: '', source: 'missing', sourceDetail: '', overridden: false },
-        { key: 'lcov', label: 'LCOV', exe: '/usr/bin/lcov', source: 'wsl', sourceDetail: 'WSL（LCOV）· 仅 WSL 内可用', overridden: false, informational: true },
+        { key: 'conan', label: 'Conan', exe: 'C:/x/conan.exe', source: 'override', overridden: true },
+        { key: 'graphviz', label: 'Graphviz (dot)', exe: '', source: 'missing', overridden: false },
       ],
     });
-    assert.ok(html.includes('环境与工具链'));
-    assert.ok(html.includes('data-page-action="env:set"'));
-    assert.ok(html.includes('conda env build'));
-    assert.ok(html.includes('仅 WSL 内可用'));
+    assert.ok(html.includes('手动覆盖（het.tools'));
+    assert.ok(html.includes('C:/x/conan.exe'));
+    assert.ok(html.includes('data-page-action="env:clear"'));
+    assert.ok(!html.includes('data-page-action="env:set"'), 'per-row manual-set button removed');
+    assert.ok(!html.includes('conda env build'), 'no sniff detail dump');
   });
 });

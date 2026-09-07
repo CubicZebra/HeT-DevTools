@@ -27,6 +27,11 @@ export interface HealthInput {
     lastBuildOk?: boolean;
     lastTestsOk?: boolean;
   };
+  /** V5-2B: managed/WSL lane facts override raw which-sniffing where provided. */
+  env?: {
+    /** true = lane conan ready · false = lane missing conan · absent = system sniff. */
+    conan?: boolean;
+  };
 }
 
 export interface HealthReport {
@@ -47,6 +52,7 @@ type RuleFn = (ctx: {
   root?: string;
   tools?: Record<string, ToolStatus>;
   state?: HealthInput['state'];
+  env?: HealthInput['env'];
 }) => Promise<RuleResult>;
 
 const VERDICT_PASS = 80;
@@ -61,10 +67,23 @@ export async function runHealthCheck(input: HealthInput): Promise<HealthReport> 
       id: 'env.conan',
       title: 'Conan 可用',
       weight: 10,
-      run: () =>
-        Promise.resolve(
+      run: () => {
+        // V5-2B: managed/lane fact wins over which() sniffing under managed semantics.
+        if (input.env?.conan === true) {
+          return Promise.resolve({ ok: true, detail: '托管车道 conan 已就绪' });
+        }
+        if (input.env?.conan === false) {
+          return Promise.resolve({
+            ok: false,
+            required: true,
+            detail: '托管环境 conan 未就绪',
+            suggestion: '在“环境”页一键准备（het.env.prepare），或检查 WSL 车道',
+          });
+        }
+        return Promise.resolve(
           toolResult('conan', input.tools, '构建依赖 Conan 2；缺失将无法构建。', '安装 conan（pip install conan）并 conan profile detect --force'),
-        ),
+        );
+      },
     },
     {
       id: 'env.git',
@@ -203,7 +222,7 @@ export async function runHealthCheck(input: HealthInput): Promise<HealthReport> 
 
   const checks: HealthCheckItem[] = [];
   for (const rule of rules) {
-    const result = await rule.run({ meta, root, tools: input.tools, state: input.state });
+    const result = await rule.run({ meta, root, tools: input.tools, state: input.state, env: input.env });
     const kind: CheckKind = result.ok ? 'ok' : result.required ? 'fail' : 'warn';
     checks.push({
       id: rule.id,

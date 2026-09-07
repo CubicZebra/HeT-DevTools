@@ -17,6 +17,7 @@ import type { BuildSummary } from '../../core/conanService';
 import {
   wslLaneBuildCommand,
   wslLaneEnsureCommand,
+  wslLaneLayout,
   wslLaneProfile,
   wslOutToWin,
 } from '../../core/wslLane';
@@ -50,6 +51,23 @@ async function distroHome(distro: string): Promise<string> {
     throw new Error(`WSL 发行版 ${distro} 不可用（exit=${r.code}）`);
   }
   return decodeWslOutput(r.stdout).trim();
+}
+
+/**
+ * Fast, NON-provisioning check that the lane venv already has conan (used by
+ * the health/env sample — never bootstraps, just `test -x` on the venv bin).
+ */
+export async function laneConanPresent(distro: string): Promise<boolean> {
+  try {
+    const home = await distroHome(distro);
+    const venvConan = `${wslLaneLayout(home).venv}/bin/conan`;
+    const r = await run('wsl.exe', wslRunArgs(distro, 'bash', [`test -x "${venvConan}" && echo 1`]), {
+      timeoutMs: 8000,
+    });
+    return r.code === 0 && /1/u.test(r.stdout);
+  } catch {
+    return false;
+  }
 }
 
 /**

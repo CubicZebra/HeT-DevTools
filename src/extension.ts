@@ -56,6 +56,7 @@ import { providerLabel, ProvisionPrefs } from './core/provisionPlan';
 import { currentManagedStatus, managedGc, managedPrepare, managedRemove } from './features/env/managedProvisioner';
 import { getWslLaneStatus } from './features/env/wslProbe';
 import { runWslConanCreate } from './features/env/wslLane';
+import { envConanFact } from './features/env/envSample';
 import { parseProjectToolchain } from './core/projectToolchain';
 import { getMacosLaneStatus } from './features/env/macosProbe';
 import { openHudPanel } from './features/hud/panel';
@@ -366,7 +367,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   setCockpitPageProvider('overview', async () => {
     const snap = await buildSnapshot();
     const rt = await ensureConanRuntime();
-    const envRows = await ensureToolDiscovery();
+    // V5-2B: the overview env view is authoritative via plan/managed/lane; the
+    // only generic-tool rows left are non-empty manual overrides (het.tools).
+    const overrides = toolOverridesConfig();
+    const envRows: ToolRow[] = Object.entries(overrides).map(([key, exe]) => {
+      const def = TOOL_DEFS.find((d) => d.key === key);
+      return { key, label: def?.label ?? key, exe, source: 'override' as const, overridden: true, sourceDetail: '' };
+    });
     const plan = await getCurrentProvisionPlan(false, provisionPrefs()).catch(() => null);
     const storage = contextRef?.globalStorageUri.fsPath ?? '';
     const managed = storage ? currentManagedStatus(storage, process.platform === 'win32') : null;
@@ -3117,9 +3124,11 @@ async function ensureHealthCached(force: boolean): Promise<void> {
   }
   try {
     const tools = await detectToolchain();
+    const env = await envConanFact();
     const health = await runHealthCheck({
       project: currentProject,
       tools,
+      env,
       state: { lastBuildOk, lastTestsOk: lastTestSummary ? lastTestSummary.failed === 0 : undefined },
     });
     if (health && typeof health.score === 'number') {

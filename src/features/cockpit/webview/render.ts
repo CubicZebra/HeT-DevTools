@@ -122,36 +122,27 @@ function statusMark(ok: boolean | null | undefined): string {
   return ok ? '✓' : '✗';
 }
 
+/**
+ * V5-2B: manual-override block — the ONLY generic-tool rows still shown on the
+ * overview. Everything else about the toolchain comes from the managed/lane
+ * semantics (envTopHtml / envWslHtml / envOsxHtml); no more automatic-sniff
+ * detail dump.
+ */
 function envBlockHtml(rows: ToolRow[]): string {
   if (!rows.length) {
     return '';
   }
   const items = rows
     .map((r) => {
-      const managedMissing = r.managed && r.source === 'missing';
-      const optionalMissing = r.optional && r.source === 'missing';
-      const mark = managedMissing || optionalMissing || r.informational ? '~' : r.source === 'missing' ? '✗' : '✓';
-      const exeBase = r.exe ? r.exe.split(/[\\/]/).pop() : '';
-      const src = managedMissing
-        ? '由 conan 托管（构建时自动获取，无需主机安装）'
-        : optionalMissing
-          ? '可选 · 仅 Linux/WSL 覆盖率需要'
-          : r.source === 'missing'
-            ? '未找到（安装后点重新嗅探，或手动指定）'
-            : r.source === 'override'
-              ? r.exe
-              : r.informational
-                ? `${r.sourceDetail}`
-                : `${r.sourceDetail} · ${exeBase}`;
-      const btn = `<button class="textbtn" data-page-action="env:set" data-arg-tool="${esc(r.key)}">手动指定</button>`;
+      const src = r.source === 'missing' ? '未找到（手动指定需指向存在的可执行文件）' : r.exe ?? '';
       const clear = r.overridden ? `<button class="textbtn" data-page-action="env:clear" data-arg-tool="${esc(r.key)}">清除</button>` : '';
-      return `<div class="drow"><span class="dk">${mark} ${esc(r.label)}</span><span class="dv dim">${esc(src)}</span><span class="dv">${btn}${clear}</span></div>`;
+      return `<div class="drow"><span class="dk">${esc(r.label)}</span><span class="dv dim">${esc(src)}</span><span class="dv">${clear}</span></div>`;
     })
     .join('');
-  return `<details class="mini" open>
-    <summary class="mini-head">环境与工具链（自动嗅探 · 可手动指定）</summary>
+  return `<details class="mini">
+    <summary class="mini-head">手动覆盖（het.tools · 仅列非空项）</summary>
     ${items}
-    <div class="status">来源：PATH / conda / mamba / uv / venv / WSL（~ 信息性）· gtest/benchmark 由 conan 托管 · 手动指定写入 het.tools.*，构建·文档·质量自动生效。</div>
+    <div class="status">其余工具链语义由「构建环境方案 / 托管环境 / 车道」决定；这里只列出你手动指定的覆盖。</div>
   </details>`;
 }
 
@@ -265,26 +256,15 @@ export function envOsxHtml(osx?: OsxView | null): string {
 
 function overviewContent(p: OverviewPayload): string {
   const health = p.healthScore === undefined ? '' : `<span class="chip ${p.healthScore >= 80 ? 'ok' : p.healthScore >= 50 ? 'warn' : 'fail'}">健康分 ${p.healthScore}</span>`;
-  const tools = p.tools.map((t) => `<span class="status">${t.ok ? '✓' : '✗'} ${esc(t.name)}</span>`).join(' ');
-  const rtSrc = p.runtime?.custom
-    ? '用户自定义'
-    : p.runtime?.envName
-      ? `conda env ${esc(p.runtime.envName)}（启发式推断 · 极可能）`
-      : 'PATH';
-  const runtime = p.runtime
-    ? `<div class="status">构建运行时：conan ${esc(p.runtime.version ?? '')} · ${rtSrc} · 自动嗅探</div>`
-    : '<div class="status">构建运行时：未找到 conan（已嗅探常见环境；可手动指定）</div>';
   return `<div class="row">${health}</div>
     <div class="grid">
       <div class="card"><div class="ct">最近构建</div><div class="cv">${statusMark(p.lastBuildOk)} ${p.lastBuildOk === null ? '未运行' : p.lastBuildOk ? '成功' : '失败'}</div></div>
       <div class="card"><div class="ct">最近测试</div><div class="cv">${p.lastTest ? `${statusMark((p.lastTest.failed ?? 0) === 0)} ${p.lastTest.passed ?? 0}/${(p.lastTest.failed ?? 0) + (p.lastTest.passed ?? 0)}` : '未运行'}</div></div>
     </div>
-    ${runtime}
     ${envTopHtml(p.plan ?? null, p.managed ?? null)}
     ${envWslHtml(p.wsl ?? null)}
     ${envOsxHtml(p.osx ?? null)}
     ${envBlockHtml(p.envRows ?? [])}
-    <div class="row">${tools}</div>
     <div class="actions">
       <button class="primary" data-cmd="het.test"><i class="codicon codicon-play"></i>构建并测试</button>
       <button class="primary" data-cmd="het.docs"><i class="codicon codicon-book"></i>文档</button>
