@@ -2,6 +2,12 @@
 
 All notable changes follow [Conventional Commits](https://www.conventionalcommits.org/) + fcpp emoji superset.
 
+## [0.3.3] - 2026-09-08
+
+### Fixed
+
+- **Doxygen 主入口指向导航页（docs.html）**：`het.openDocsArtifact`、chip 文档行探测、文档中心产物列表统一优先 `docs/doxygen/build/docs.html`（多语言/多版本导航中枢），不再指向某个具体语言/版本的页面；Sphinx 仍为 `html/index.html`。探测兼容旧产物（无 `docs.html` 时回退递归查找 `index.html`）。
+
 ## [0.3.2] - 2026-09-07
 
 ### Fixed

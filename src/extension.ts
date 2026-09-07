@@ -827,7 +827,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
       const dir = family === 'doxygen' ? 'doxygen' : 'sphinx';
-      const found = await findFirstIndex(join(root, 'docs', dir, 'build'));
+      // V5-8: Doxygen opens the language/version NAVIGATION hub (docs.html),
+      // never a specific language/version page; Sphinx keeps html/index.html.
+      const main = family === 'doxygen' ? join(root, 'docs', 'doxygen', 'build', 'docs.html') : '';
+      const found = main && existsSync(main) ? main : await findFirstIndex(join(root, 'docs', dir, 'build'));
       if (!found) {
         void vscode.window.showWarningMessage(`未找到 ${dir} 文档产物（请先构建文档）。`);
         return;
@@ -1367,8 +1370,13 @@ function openDocsPanel(context: vscode.ExtensionContext): void {  const locateAr
       }
     };
     await walk(join(root, 'docs', 'sphinx', 'build'), 'docs/sphinx/build', 0);
+    // V5-8: the Doxygen language/version navigation hub is the FIRST artifact.
+    const doxMain = join(root, 'docs', 'doxygen', 'build', 'docs.html');
+    if (existsSync(doxMain)) {
+      hits.push({ rel: 'docs/doxygen/build/docs.html', abs: doxMain });
+    }
     await walk(join(root, 'docs', 'doxygen', 'build'), 'docs/doxygen/build', 0);
-    return hits.sort((a, b) => a.rel.localeCompare(b.rel));
+    return hits.sort((a, b) => (a.rel === 'docs/doxygen/build/docs.html' ? -1 : a.rel.localeCompare(b.rel)));
   };
 
   const getState = async (): Promise<DocsState> => {
@@ -3235,7 +3243,9 @@ async function probeDocsArtifacts(root?: string): Promise<{ doxygen: boolean; sp
     }
     return false;
   };
-  out.doxygen = await scan(join(root, 'docs', 'doxygen', 'build'));
+  // V5-8: the Doxygen MAIN entry is docs/doxygen/build/docs.html (the
+  // language/version navigation hub), not a per-language index.html.
+  out.doxygen = existsSync(join(root, 'docs', 'doxygen', 'build', 'docs.html')) || await scan(join(root, 'docs', 'doxygen', 'build'));
   out.sphinx = await scan(join(root, 'docs', 'sphinx', 'build'));
   return out;
 }
