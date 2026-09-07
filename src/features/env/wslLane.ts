@@ -33,7 +33,8 @@ let cache: { at: number; home: string; note?: string } | null = null;
 
 // IMPORTANT: wsl.exe round-trips `bash -c/-lc <argv script>` through the
 // Windows command line, which mangles multi-line/meta-char scripts (command
-// substitutions break with a syntax error). ALWAYS run lane scripts from a
+// substitutions break with a syntax error; even plain double-quoted `$lane`
+// variables fail to expand reliably). ALWAYS run lane scripts from a
 // file: write the script to a Windows temp path and `wsl.exe … -- bash <file>`
 // (Linux side can read `/mnt/c/…` directly).
 let scriptSeq = 0;
@@ -42,6 +43,21 @@ function writeWslTempScript(content: string): { win: string; wsl: string } {
   const win = join(tmpdir(), `het-lane-${process.pid}-${scriptSeq}.sh`);
   writeFileSync(win, content, 'utf8');
   return { win, wsl: toWslPath(win) };
+}
+
+/** Run a lane script through the file transport (only reliable wsl path). */
+export async function runWslScript(
+  distro: string,
+  content: string,
+  timeoutMs = 15_000,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const tmp = writeWslTempScript(content);
+  try {
+    const r = await run('wsl.exe', wslRunArgs(distro, 'bash', [tmp.wsl]), { timeoutMs });
+    return { code: r.code ?? -1, stdout: r.stdout, stderr: r.stderr };
+  } finally {
+    rmSync(tmp.win, { force: true });
+  }
 }
 
 /** Resolve the distro default user's $HOME (as the lane will run). */
@@ -58,18 +74,57 @@ async function distroHome(distro: string): Promise<string> {
 /**
  * Fast, NON-provisioning check that the lane venv already has conan (used by
  * the health/env sample — never bootstraps, just `test -x` on the venv bin).
+ * NOTE: must go through the FILE transport — the previous inline
+ * `bash <"test -x …">` (no -lc) made bash treat the shell text as a FILENAME
+ * and always returned exit 127 → the "conan 就绪" fact was permanently false
+ * even after successful builds (issue-3 root cause).
  */
 export async function laneConanPresent(distro: string): Promise<boolean> {
   try {
     const home = await distroHome(distro);
     const venvConan = `${wslLaneLayout(home).venv}/bin/conan`;
-    const r = await run('wsl.exe', wslRunArgs(distro, 'bash', [`test -x "${venvConan}" && echo 1`]), {
-      timeoutMs: 8000,
-    });
+    const r = await runWslScript(distro, `test -x "${venvConan}" && echo 1`, 8000);
     return r.code === 0 && /1/u.test(r.stdout);
   } catch {
     return false;
   }
+}
+
+/** Lane docs-tool fact (file transport): python/sphinx from the venv,
+ *  doxygen/dot/make from the distro system (as apt-provisioned). */
+export interface LaneDocsTools {
+  python?: string;
+  sphinx?: string;
+  doxygen?: string;
+  dot?: string;
+  make?: string;
+}
+
+export async function probeLaneDocsTools(distro: string): Promise<LaneDocsTools> {
+  const script = [
+    'P="$HOME/.het-fti/managed-env/venv/bin"',
+    'printf "python:"; [ -x "$P/python" ] && "$P/python" --version 2>/dev/null | head -1 || echo -; echo',
+    'printf "sphinx:"; [ -x "$P/sphinx-build" ] && "$P/sphinx-build" --version 2>/dev/null | head -1 || echo -; echo',
+    'printf "doxygen:"; [ -x /usr/bin/doxygen ] && doxygen --version 2>/dev/null || echo -; echo',
+    'printf "dot:"; [ -x /usr/bin/dot ] && dot -V 2>&1 | head -1 || echo -; echo',
+    'printf "make:"; [ -x /usr/bin/make ] && make --version 2>/dev/null | head -1 || echo -; echo',
+  ].join('\n');
+  const r = await runWslScript(distro, script, 15_000).catch(() => null);
+  if (!r) {
+    return {};
+  }
+  const out: LaneDocsTools = {};
+  for (const raw of r.stdout.split(/\r?\n/u)) {
+    const m = /^(python|sphinx|doxygen|dot|make):(.*)$/u.exec(raw.trim());
+    if (!m) {
+      continue;
+    }
+    const v = m[2].trim();
+    if (v && v !== '-') {
+      (out as Record<string, string>)[m[1]] = v;
+    }
+  }
+  return out;
 }
 
 /** Quiet, idempotent root apt install of one or more packages (no conda). */

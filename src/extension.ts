@@ -26,7 +26,7 @@ import { BenchState, showBenchPanel } from './features/bench/panel';
 import { CiState, CiRunInfo, showCiPanel } from './features/ci/panel';
 import { showSettingsPanel } from './features/settings/panel';
 import { showTestResultsPanel } from './features/testResults/panel';
-import { DashboardSnapshot } from './features/ui';
+import { DashboardSnapshot, esc, pageShell } from './features/ui';
 import { registerTestController } from './features/testExplorer/controller';
 import { chipSpec } from './features/statusChip';
 import {
@@ -56,7 +56,7 @@ import { getCurrentProvisionPlan, getHostCapabilities } from './features/env/pro
 import { providerLabel, ProvisionPrefs } from './core/provisionPlan';
 import { currentManagedStatus, managedGc, managedPrepare, managedRemove } from './features/env/managedProvisioner';
 import { getWslLaneStatus } from './features/env/wslProbe';
-import { runWslConanCreate, runWslDocs } from './features/env/wslLane';
+import { runWslConanCreate, runWslDocs, probeLaneDocsTools, LaneDocsTools } from './features/env/wslLane';
 import { collectEnvSample, envConanFact } from './features/env/envSample';
 import { findCoverageReport, readCoveragePct } from './features/coverage/report';
 import { onStateChange, notifyStateChange } from './features/live';
@@ -89,6 +89,8 @@ let lastHealth: { score: number; verdict: 'PASS' | 'WARN' | 'FAIL'; gaps: string
 let lastHealthReport: HealthReport | null = null;
 /** V5-2: last docs build outcome (技术文档 row). */
 let lastDocs: { ok: boolean; at: number } | null = null;
+/** V5-6: docs build in flight (chip spinner + cockpit log drawer sync). */
+let docsRunning = false;
 /** V5-6: parsed coverage % from the located report (cached 30 s). */
 let coverageProbeCache: { at: number; found: boolean; line: number | null; func: number | null } | null = null;
 /** V5-2: short-lived env sample summary cache for the 开发环境 row. */
@@ -1375,15 +1377,35 @@ function openDocsPanel(context: vscode.ExtensionContext): void {  const locateAr
       return { projectName: '', languages: [], versions: [], tools: [], graphvizMismatch: false, graphvizCurrent: '', graphvizExpected: '', artifacts: [] };
     }
     const meta = await loadMetadata(root);
-    const dotExe = await which('dot');
-    const gv = graphvizMismatch(meta, dotExe);
-    const tools: DocToolStatus[] = [
-      { name: 'Python', ok: (await which('python')) !== null },
-      { name: 'Doxygen', ok: (await which('doxygen')) !== null },
-      { name: 'Graphviz (dot)', ok: dotExe !== null },
-      { name: 'Sphinx', ok: (await which('sphinx-build')) !== null },
-      { name: 'make', ok: process.platform !== 'win32' || (await which('make')) !== null, note: process.platform === 'win32' ? 'Sphinx 段需要' : undefined },
-    ];
+    // V5-6 (issue-1): under the managed WSL2 lane the docs center must report
+    // the LANE toolchain (venv python/sphinx + system doxygen/dot/make), not
+    // the Windows-side sniff — otherwise it wrongly shows "Python ✗" and a
+    // graphviz mismatch even though the lane auto-fixes/reconciles everything.
+    const laneDistro = currentProject ? await managedLaneDistro(currentProject) : null;
+    let gv: { mismatch: boolean; current: string; expected: string };
+    let tools: DocToolStatus[];
+    if (laneDistro) {
+      const lane = await probeLaneDocsTools(laneDistro).catch(() => ({} as LaneDocsTools));
+      tools = [
+        { name: 'Python', ok: !!lane.python, note: lane.python ? '车道 venv' : '车道未就绪（首次构建自动准备）' },
+        { name: 'Doxygen', ok: !!lane.doxygen, note: lane.doxygen ? '车道系统 apt' : '首次构建自动安装' },
+        { name: 'Graphviz (dot)', ok: !!lane.dot, note: lane.dot ? '车道 /usr/bin' : '首次构建自动安装' },
+        { name: 'Sphinx', ok: !!lane.sphinx, note: lane.sphinx ? '车道 venv' : '首次构建自动安装' },
+        { name: 'make', ok: !!lane.make, note: lane.make ? '车道系统' : '首次构建自动安装' },
+      ];
+      // Lane graphviz_bin is always /usr/bin (reconciled) — never a mismatch.
+      gv = { mismatch: false, current: meta.graphviz_bin ?? '', expected: '/usr/bin' };
+    } else {
+      const dotExe = await which('dot');
+      gv = graphvizMismatch(meta, dotExe);
+      tools = [
+        { name: 'Python', ok: (await which('python')) !== null },
+        { name: 'Doxygen', ok: (await which('doxygen')) !== null },
+        { name: 'Graphviz (dot)', ok: dotExe !== null },
+        { name: 'Sphinx', ok: (await which('sphinx-build')) !== null },
+        { name: 'make', ok: process.platform !== 'win32' || (await which('make')) !== null, note: process.platform === 'win32' ? 'Sphinx 段需要' : undefined },
+      ];
+    }
     const opts = docsOptions(meta);
     return {
       projectName: currentProject.metadata.name ?? '',
@@ -1402,57 +1424,71 @@ function openDocsPanel(context: vscode.ExtensionContext): void {  const locateAr
     if (!root) {
       return { ok: false, message: '未检测到 fcpp 项目。' };
     }
+    // V5-6: visible progress — chip spinner + cockpit log drawer, exactly like
+    // `conan create` (user feedback: docs build must show busy + explanations).
+    docsRunning = true;
+    void refreshChip();
+    const finish = (ok: boolean): void => {
+      docsRunning = false;
+      lastDocs = { ok, at: Date.now() };
+      void refreshChip();
+    };
+    const stream = (c: string): void => {
+      channel?.append(c);
+      emitCockpitEvent({ type: 'log:append', line: c.replace(/\s+$/u, '') });
+    };
     // V5-4: Windows + managed → build docs INSIDE the WSL2 lane (docs stack is
     // self-provisioned: venv sphinx/numpy + apt doxygen/graphviz/make).
     if (process.platform === 'win32' && currentProject && (await projectToolchainFor(currentProject)) !== 'system') {
-      const plan = await getCurrentProvisionPlan(false, provisionPrefs()).catch(() => null);
-      const wsl = await getWslLaneStatus(false).catch(() => null);
-      if (plan?.provider === 'win-wsl2' && wsl?.available && wsl.distro) {
+      const laneDistro = await managedLaneDistro(currentProject);
+      if (laneDistro) {
         await reconcileGraphvizForLane(root);
-        channel?.appendLine(`[docs] WSL2 车道文档构建：distro=${wsl.distro} · ${root}`);
+        channel?.appendLine(`[docs] WSL2 车道文档构建：distro=${laneDistro} · ${root}`);
+        emitCockpitEvent({ type: 'log:start', title: `docs/build.py · WSL2 ${laneDistro}` });
         let summary;
         try {
-          summary = await runWslDocs(wsl.distro, root, {
-            onStdout: (c) => channel?.append(c),
-            onStderr: (c) => channel?.append(c),
-          });
+          summary = await runWslDocs(laneDistro, root, { onStdout: stream, onStderr: stream });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           channel?.appendLine(msg);
-          lastDocs = { ok: false, at: Date.now() };
-          void refreshChip();
+          emitCockpitEvent({ type: 'log:done', ok: false });
+          finish(false);
           return { ok: false, message: msg };
         }
         const artifacts = await locateArtifacts(root);
         const ok = summary.ok;
         log(`[docs] lane finished ok=${ok} artifacts=${artifacts.length}`);
-        lastDocs = { ok, at: Date.now() };
-        void refreshChip();
+        emitCockpitEvent({ type: 'log:done', ok });
+        finish(ok);
         if (!ok) {
           return { ok: false, message: '文档生成失败（车道）：请查看“输出 → HeT DevTools”。' };
         }
         return { ok: true, message: `文档生成完成，找到 ${artifacts.length} 个产物页面（WSL2 车道）。` };
       }
+      const plan = await getCurrentProvisionPlan(false, provisionPrefs()).catch(() => null);
       if (plan?.provider === 'win-wsl2-pending') {
+        finish(false);
         return { ok: false, message: 'managed 文档构建需要 WSL2 发行版（当前无可用发行版）。请先 wsl --install -d Ubuntu-24.04，或把 metadata.toolchain 设为 system。' };
       }
     }
     const python = await which('python');
     if (!python) {
+      finish(false);
       return { ok: false, message: '找不到 python（docs/build.py 需要）。请先安装 Python 3.10+。' };
     }
     channel?.appendLine(`[docs] ${python} docs/build.py @ ${root}`);
+    emitCockpitEvent({ type: 'log:start', title: `docs/build.py（本机）` });
     const result = await run(python, ['docs/build.py'], {
       cwd: root,
-      onStdout: (c) => channel?.append(c),
-      onStderr: (c) => channel?.append(c),
+      onStdout: stream,
+      onStderr: stream,
       timeoutMs: 0,
     });
     const artifacts = await locateArtifacts(root);
     const ok = result.code === 0;
     log(`[docs] finished ok=${ok} artifacts=${artifacts.length}`);
-    lastDocs = { ok, at: Date.now() };
-    void refreshChip();
+    emitCockpitEvent({ type: 'log:done', ok });
+    finish(ok);
     if (!ok) {
       return { ok: false, message: '文档生成失败：请查看“输出 → HeT DevTools”中的原始日志（常见：注释标注/工具缺失）。' };
     }
@@ -1518,7 +1554,6 @@ function showHealthReportPanel(context: vscode.ExtensionContext): void {
     { enableScripts: true, localResourceRoots: [context.extensionUri] },
   );
   healthPanel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.png');
-  const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   let busy = false;
 
   const render = (): void => {
@@ -1527,35 +1562,44 @@ function showHealthReportPanel(context: vscode.ExtensionContext): void {
       return;
     }
     const r = lastHealthReport;
-    const busyNote = busy ? '<p style="opacity:.7">⏳ 体检中…（完成后自动刷新）</p>' : '';
+    const busyNote = busy ? '<div class="card warn">⏳ 体检中…（完成后自动刷新）</div>' : '';
     if (!r) {
-      panel.webview.html =
-        '<body style="font-family:var(--vscode-font-family)"><h3>工程健康</h3><p>尚未体检 — 点击重新体检，或先在项目中构建/测试。</p>' +
-        busyNote +
-        '<button id="rerun">重新体检</button>' +
-        '<script>const vscode=acquireVsCodeApi();document.getElementById("rerun").onclick=()=>vscode.postMessage({type:"rerun"});</script></body>';
+      panel.webview.html = pageShell(
+        '工程健康明细',
+        `<h1>工程健康</h1>
+         <div class="sub">尚未体检 — 点击重新体检，或先在项目中构建/测试。</div>
+         ${busyNote}
+         <button id="rerun">重新体检</button>
+         <script>
+           (function () { document.getElementById("rerun").onclick = () => vscode.postMessage({ type: "rerun" }); })();
+         </script>`,
+      );
       return;
     }
     const rows = r.checks
       .map((c) => {
-        const colour = c.kind === 'ok' ? '#4ec9b0' : c.kind === 'warn' ? '#d7ba7d' : '#f48771';
+        const cls = c.kind === 'ok' ? 'ok' : c.kind === 'warn' ? 'warn' : 'fail';
         const mark = c.kind === 'ok' ? '✓' : c.kind === 'warn' ? '!' : '✗';
-        const part = c.kind === 'ok' ? c.weight : c.kind === 'warn' ? Math.round(c.weight * 0.5) : 0;
-        return `<div style="padding:6px 0;border-bottom:1px solid var(--vscode-panel-border)">` +
-          `<span style="color:${colour};font-weight:600">${mark} ${esc(c.title)}</span>` +
-          `<span style="float:right;opacity:.7">${part}/100</span>` +
-          `<div style="opacity:.75;font-size:12px">${esc(c.detail)}</div>` +
-          `${c.suggestion ? `<div style="font-size:12px">建议：${esc(c.suggestion)}</div>` : ''}</div>`;
+        const part = c.grade !== undefined ? Math.round(c.weight * c.grade) : c.kind === 'ok' ? c.weight : c.kind === 'warn' ? Math.round(c.weight * 0.5) : 0;
+        return `<div class="row">
+          <span class="title"><span class="${cls}">${mark}</span> <b>${esc(c.title)}</b> <span class="tag">${part}/${c.weight}</span></span>
+        </div>
+        <div class="detail">${esc(c.detail)}</div>
+        ${c.suggestion ? `<div class="suggest">建议：${esc(c.suggestion)}</div>` : ''}`;
       })
       .join('');
-    const tone = r.verdict === 'PASS' ? '#4ec9b0' : r.verdict === 'WARN' ? '#d7ba7d' : '#f48771';
-    panel.webview.html =
-      '<body style="font-family:var(--vscode-font-family);padding:4px 12px">' +
-      `<h3>工程健康：<span style="color:${tone}">${r.score}/100 · ${verdictZh(r.verdict)}</span></h3>` +
-      busyNote +
-      rows +
-      '<button id="rerun" style="margin-top:10px">重新体检</button>' +
-      '<script>const vscode=acquireVsCodeApi();document.getElementById("rerun").onclick=()=>vscode.postMessage({type:"rerun"});</script></body>';
+    const toneCls = r.verdict === 'PASS' ? 'ok' : r.verdict === 'WARN' ? 'warn' : 'fail';
+    panel.webview.html = pageShell(
+      '工程健康明细',
+      `<h1>工程健康：<span class="${toneCls}">${r.score}/100 · ${verdictZh(r.verdict)}</span></h1>
+       <div class="sub">12 项规则 · 绿≥80% · 黄≥50% · 红不达标（细粒度分级打分）</div>
+       ${busyNote}
+       <div class="card">${rows}</div>
+       <button id="rerun">重新体检</button>
+       <script>
+         (function () { document.getElementById("rerun").onclick = () => vscode.postMessage({ type: "rerun" }); })();
+       </script>`,
+    );
   };
 
   // V5-6: re-render on every chip-state broadcast (single source of truth).
@@ -3126,8 +3170,12 @@ async function assembleHudModel(): Promise<HudModel> {
           ? '可选（Linux/WSL 覆盖率）'
           : '未找到'
       : (t.sourceDetail || t.exe || t.source).slice(0, 60);
+    // V5-7 dual-line: the second line shows the REAL binding (lane path vs
+    // system path) so users can tell the managed toolchain from local tools.
+    let path = missing ? (t.managed ? 'Conan 缓存中的包（构建时自动获取）' : '本机未找到') : (t.exe || t.sourceDetail || '').slice(0, 96);
     if (laneOk) {
       tone = 'ok';
+      const bin = 'WSL2 车道 · ~/.het-fti/managed-env/venv/bin';
       value =
         t.key === 'conan' && lane?.conan
           ? `WSL2 车道 venv · ${lane.conan}`
@@ -3138,8 +3186,11 @@ async function assembleHudModel(): Promise<HudModel> {
               : t.key === 'ninja'
                 ? 'WSL2 车道 venv（托管）'
                 : value;
+      if (['conan', 'cmake', 'python', 'ninja'].includes(t.key)) {
+        path = `${bin}/${t.key}`;
+      }
     }
-    env.push({ label: t.label, value, tone });
+    env.push({ label: t.label, value, tone, path });
   }
   return {
     title: currentProject?.metadata?.name ?? 'fcpp 项目',
@@ -3280,11 +3331,14 @@ async function refreshChip(): Promise<void> {
     probeDocsArtifacts(currentProject?.root),
     probeCoverage(currentProject?.root),
   ]);
-  const docs = docsRowState(docsArt, lastDocs);
+  // V5-6: docs build in flight → spinner + "构建文档" running line (like create).
+  const docs = docsRunning
+    ? { state: 'running' as const, doxygen: false, sphinx: false }
+    : docsRowState(docsArt, lastDocs);
   const spec = chipSpec({
     projectName: currentProject?.metadata?.name ?? '',
     health: lastHealth?.score ?? null,
-    running: st.top.running,
+    running: docsRunning ? '构建文档' : st.top.running,
     lastBuildOk: lastBuildOk ?? null,
     test: lastTestSummary
       ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped }
@@ -3427,11 +3481,17 @@ async function ensureHealthCached(force: boolean): Promise<void> {
   try {
     const tools = await detectToolchain();
     const env = await envConanFact();
+    const cov = await probeCoverage(currentProject.root);
     const health = await runHealthCheck({
       project: currentProject,
       tools,
       env,
-      state: { lastBuildOk, lastTestsOk: lastTestSummary ? lastTestSummary.failed === 0 : undefined },
+      coverage: cov,
+      state: {
+        lastBuildOk,
+        lastTestsOk: lastTestSummary ? lastTestSummary.failed === 0 : undefined,
+        testsRun: lastTestSummary ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped } : undefined,
+      },
     });
     if (health && typeof health.score === 'number') {
       lastHealthReport = health;
@@ -3509,6 +3569,20 @@ async function projectToolchainFor(project: FcppProject): Promise<'managed' | 's
   } catch {
     return 'managed';
   }
+}
+
+/** V5-6: the WSL2 managed-lane distro for a project (null = native/system). */
+async function managedLaneDistro(project: FcppProject): Promise<string | null> {
+  if (process.platform !== 'win32') {
+    return null;
+  }
+  const tc = await projectToolchainFor(project);
+  if (tc === 'system') {
+    return null;
+  }
+  const plan = await getCurrentProvisionPlan(false, provisionPrefs()).catch(() => null);
+  const wsl = await getWslLaneStatus(false).catch(() => null);
+  return plan?.provider === 'win-wsl2' && wsl?.available && wsl.distro ? wsl.distro : null;
 }
 
 /** Run `conan create` in the project and stream everything to the output channel. */

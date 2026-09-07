@@ -39,16 +39,21 @@ export function showDocsPanel(context: vscode.ExtensionContext, deps: DocsDeps):
   );
   panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.png');
 
+  // V5-6: visible busy state while docs build (spinner in-panel, like chip).
+  let busy = false;
   const render = async (): Promise<void> => {
     const state = await deps.getState();
-    panel.webview.html = buildHtml(state);
+    panel.webview.html = buildHtml(state, busy);
   };
 
   panel.webview.onDidReceiveMessage(async (message: { type: string; rel?: string; family?: string }) => {
     if (message.type === 'refresh') {
       await render();
     } else if (message.type === 'runDocs') {
+      busy = true;
+      await render();
       const r = await deps.runDocs();
+      busy = false;
       const st = await deps.getState();
       const hasSph = st.artifacts.some((a) => a.rel.startsWith('docs/sphinx/'));
       const hasDox = st.artifacts.some((a) => a.rel.startsWith('docs/doxygen/'));
@@ -85,8 +90,11 @@ export function showDocsPanel(context: vscode.ExtensionContext, deps: DocsDeps):
   return panel;
 }
 
-function buildHtml(state: DocsState): string {
+function buildHtml(state: DocsState, busy = false): string {
   const noProject = state.projectName.length === 0;
+  const busyNote = busy
+    ? '<div class="warn">⏳ 正在生成文档（Doxygen + Sphinx）… 完成后自动刷新，产物入口点 “刷新”。</div>'
+    : '';
   const toolChips = state.tools
     .map((t) => `<span class="chip ${t.ok ? 'ok' : 'fail'}">${esc(t.name)} ${t.ok ? '✓' : '✗'}</span>`)
     .join(' ');
@@ -150,6 +158,7 @@ sudo apt install doxygen graphviz make python3-sphinx</pre></div></div>`
       <h1>文档中心</h1>
       <div class="sub">项目：${esc(state.projectName || '—')} · 一键生成 Doxygen + Sphinx 双语多版本文档</div>
       ${noProject ? '<div class="warn">未检测到 fcpp 项目：请先打开含 metadata.json 的库文件夹。</div>' : ''}
+      ${busyNote}
       ${graphviz}
       ${missingBanner}
       <h2>语言与版本（来自 metadata.json）</h2>

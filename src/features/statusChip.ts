@@ -199,11 +199,17 @@ export function chipSpec(m: ChipModel): ChipSpec | null {
   const runningLine = m.running && m.running !== 'env' ? `\n\n$(sync~spin) 运行中：${m.running}` : '';
 
   // V5-6 (issue-4): every EXECUTE action lives here — the status cells above
-  // only show results + entry links. Order locked: env check 1st, build+test 2nd.
+  // only show results + entry links. V5-7: bullet per action so the hover card
+  // never squeezes 6 links into one wrapping line (issue-2 feedback).
   const quick = [
     '━━━ 快捷操作（点按即执行）━━━',
-    [cmdLink('🔧 检查环境', 'het.envCheck'), cmdLink('🚀 构建并测试', 'het.test'), cmdLink('📚 构建文档', 'het.docs')].join(' '),
-    [cmdLink('📊 生成覆盖率', 'het.coverage'), cmdLink('💚 重新体检', 'het.healthCheck'), cmdLink('🖥️ 完整监控卡', 'het.chipOverview')].join(' '),
+    '',
+    `- ${cmdLink('🔧 检查环境', 'het.envCheck')}`,
+    `- ${cmdLink('🚀 构建并测试', 'het.test')}`,
+    `- ${cmdLink('📚 构建文档', 'het.docs')}`,
+    `- ${cmdLink('📊 生成覆盖率', 'het.coverage')}`,
+    `- ${cmdLink('💚 重新体检', 'het.healthCheck')}`,
+    `- ${cmdLink('🖥️ 完整监控卡', 'het.chipOverview')}`,
   ].join('\n');
 
   const tooltip = [

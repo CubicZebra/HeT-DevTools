@@ -46,6 +46,9 @@ describe('statusChip V5-2/V5-6 hover console', () => {
     const s = chipSpec(projectModel())!;
     // The bar exists below the table with all six actions, each exactly once.
     assert.ok(s.tooltip.includes('━━━ 快捷操作（点按即执行）━━━'));
+    // V5-7: one action per line (bullet list) — never a squeezed single row.
+    assert.ok(s.tooltip.includes('\n- [🔧 检查环境]('), 'first action is its own bullet line');
+    assert.ok(s.tooltip.includes('\n- [🖥️ 完整监控卡]('), 'last action is its own bullet line');
     const execute = [
       ['command:het.envCheck', '检查环境'],
       ['command:het.test', '构建并测试'],

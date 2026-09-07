@@ -8,6 +8,7 @@
  */
 import { run } from '../../utils/exec';
 import { MANAGED_DISTRO, WslToolSnapshot, decodeWslOutput, parseWslList, parseWslToolReport } from '../../core/wslHost';
+import { runWslScript } from './wslLane';
 
 export interface WslLaneStatus {
   available: boolean;
@@ -28,15 +29,11 @@ const PROBE = [
   "printf 'lcov:'; lcov --version 2>/dev/null | head -1; echo",
 ].join(';');
 
-// V5-6 (issue-1): conan/cmake are reported from the MANAGED LANE venv (the
+// V5-6 (issue-1/3): conan/cmake are reported from the MANAGED LANE venv (the
 // toolchain the extension actually uses for builds/docs), NOT from the
-// distro base. `$HOME` variable expansion survives wsl.exe (distroHome uses
-// it); command substitution `$(...)` is what mangles, so none is used here.
-const LANE_PROBE = [
-  'lane="$HOME/.het-fti/managed-env/venv/bin"',
-  "printf 'conan:'; if [ -x \"$lane/conan\" ]; then \"$lane/conan\" --version 2>/dev/null | head -1; else echo -; fi; echo",
-  "printf 'cmake:'; if [ -x \"$lane/cmake\" ]; then \"$lane/cmake\" --version 2>/dev/null | head -1; else echo -; fi; echo",
-].join(';');
+// distro base. The probe MUST go through the file transport — the previous
+// inline `bash -lc '…"$lane/…"…'` was mangled by wsl.exe and returned "-" for
+// both tools even when present (issue-3: HUD CMake ✗, conan fact false).
 
 async function listDistros(): Promise<string[]> {
   try {
@@ -66,7 +63,12 @@ export async function probeDistroTools(distro: string): Promise<WslToolSnapshot>
 /** Probe the managed lane venv conan/cmake (no provisioning — read only). */
 export async function probeLaneTools(distro: string): Promise<{ conan?: string; cmake?: string }> {
   try {
-    const r = await run('wsl.exe', ['-d', distro, '--', 'bash', '-lc', LANE_PROBE], { timeoutMs: 15000 });
+    const script = [
+      'P="$HOME/.het-fti/managed-env/venv/bin"',
+      "printf 'conan:'; [ -x \"$P/conan\" ] && \"$P/conan\" --version 2>/dev/null | head -1 || echo -; echo",
+      "printf 'cmake:'; [ -x \"$P/cmake\" ] && \"$P/cmake\" --version 2>/dev/null | head -1 || echo -; echo",
+    ].join('\n');
+    const r = await runWslScript(distro, script, 15_000);
     if (r.code !== 0) {
       return {};
     }

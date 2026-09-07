@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { esc } from '../ui';
+import { esc, pageShell } from '../ui';
 import { onStateChange } from '../live';
 
 export interface CoverageState {
@@ -71,49 +71,44 @@ export function showCoveragePanel(context: vscode.ExtensionContext, deps: Covera
 function buildHtml(state: CoverageState): string {
   const noProject = state.projectName.length === 0;
   const banner = noProject
-    ? `<div class="warn">未检测到 fcpp 项目：请先打开含 metadata.json 的库文件夹。</div>`
+    ? '<div class="card fail">未检测到 fcpp 项目：请先打开含 metadata.json 的库文件夹。</div>'
     : !state.enabled
-      ? `<div class="warn">覆盖率开关未开启（metadata.json 的 activate_code_coverage=false）。开启后“构建并测覆盖率”会使用 g++/gcov 工具链（Linux CI 同源），MSVC 环境请改用 WSL/CI 生成。</div>`
-      : `<div class="ok-note">activate_code_coverage=true — 覆盖率构建已启用。</div>`;
+      ? '<div class="card warn">覆盖率开关未开启（<code>activate_code_coverage=false</code>）。开启后“构建并测覆盖率”走 g++/gcov 车道（Linux CI 同源），MSVC 本机请改用 WSL/CI 生成。</div>'
+      : '<div class="card ok">activate_code_coverage=true — 覆盖率构建已启用。</div>';
 
   const toggleBtn = noProject
     ? ''
-    : `<button data-action="toggle" data-value="${state.enabled ? 'false' : 'true'}">${state.enabled ? '关闭 activate_code_coverage' : '一键开启 activate_code_coverage'}</button>`;
+    : `<button data-action="toggle" data-value="${state.enabled ? 'false' : 'true'}" class="${state.enabled ? 'secondary' : ''}">${state.enabled ? '关闭 activate_code_coverage' : '一键开启 activate_code_coverage'}</button>`;
 
   const report = state.reportPath
-    ? `<div class="ok-note">报告就绪：<code>${esc(state.reportPath)}</code></div>
-       <button data-action="openReport">在浏览器打开报告</button>`
-    : `<div class="tag">尚未找到 coverage_report/index.html。点击下方按钮构建并测量覆盖率。</div>`;
+    ? `<div class="card ok">报告就绪：<code>${esc(state.reportPath)}</code>
+       <div class="row"><button data-action="openReport">在浏览器打开报告</button></div></div>`
+    : '<div class="tag">尚未找到 coverage_report/index.html。点击下方按钮构建并测量覆盖率。</div>';
 
-  return `
-    <style>
-      .warn { background: rgba(226,192,141,.12); border: 1px solid #e2c08d; border-radius: 6px;
-        padding: 8px 10px; margin: 8px 0; font-size: 12px; }
-      .ok-note { color: #89d185; font-size: 12px; margin: 8px 0; }
-      .tag { font-size: 12px; opacity: .75; margin: 8px 0; }
-      code { background: var(--vscode-textCodeBlock-background,#111); padding: 1px 5px; border-radius: 4px; }
-    </style>
-    <div class="card">
-      <h1>覆盖率</h1>
-      <div class="sub">项目：${esc(state.projectName || '—')}</div>
-      ${banner}
-      <div class="row">${toggleBtn}
-        <button data-action="runCoverage">🔄 构建并测覆盖率</button>
-      </div>
-      ${report}
-    </div>
-    <script>
-      (function () {
-        const vscode = acquireVsCodeApi();
-        document.querySelectorAll('[data-action]').forEach((b) =>
-          b.addEventListener('click', () => {
-            const act = b.getAttribute('data-action');
-            if (act === 'toggle') {
-              vscode.postMessage({ type: 'toggle', enabled: b.getAttribute('data-value') === 'true' });
-            } else {
-              vscode.postMessage({ type: act });
-            }
-          }));
-      })();
-    </script>`;
+  return pageShell(
+    '覆盖率',
+    `<h1>覆盖率</h1>
+     <div class="sub">项目：${esc(state.projectName || '—')}</div>
+     ${banner}
+     <div class="card">
+       <div class="row">${toggleBtn}
+         <button data-action="runCoverage">🔄 构建并测覆盖率</button>
+       </div>
+       ${report}
+     </div>
+     <script>
+       (function () {
+         const vscode = acquireVsCodeApi();
+         document.querySelectorAll('[data-action]').forEach((b) =>
+           b.addEventListener('click', () => {
+             const act = b.getAttribute('data-action');
+             if (act === 'toggle') {
+               vscode.postMessage({ type: 'toggle', enabled: b.getAttribute('data-value') === 'true' });
+             } else {
+               vscode.postMessage({ type: act });
+             }
+           }));
+       })();
+     </script>`,
+  );
 }

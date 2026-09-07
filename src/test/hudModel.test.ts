@@ -66,6 +66,21 @@ describe('V4-6 hudModel (Level-2 HUD card)', () => {
     assert.ok(mid.includes('font-size: 14.5px'));
   });
 
+  it('V5-7 dual-line env rows render the real binding path', () => {
+    const html = hudHtml(
+      model({
+        env: [
+          { label: 'Conan', value: 'WSL2 车道 venv · Conan version 2.32.0', tone: 'ok', path: 'WSL2 车道 · ~/.het-fti/managed-env/venv/bin/conan' },
+          { label: 'CMake', value: 'WSL2 车道 venv · cmake 4.4.3', tone: 'ok', path: 'WSL2 车道 · ~/.het-fti/managed-env/venv/bin/cmake' },
+        ],
+      }),
+      13,
+    );
+    assert.ok(html.includes('class="env-path"'), 'dual-line path element present');
+    assert.ok(html.includes('~/.het-fti/managed-env/venv/bin/conan'), 'lane conan path shown');
+    assert.ok(html.includes('~/.het-fti/managed-env/venv/bin/cmake'), 'lane cmake path shown');
+  });
+
   it('env tones map to ok/warn/fail classes', () => {
     const html = hudHtml(
       model({

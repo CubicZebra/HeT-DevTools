@@ -87,6 +87,53 @@ describe('healthCheck', () => {
     assert.strictEqual(sum, 100);
   });
 
+  it('V5-6 graded scoring: coverage 90% = full, on-without-report = partial', async () => {
+    const full = await runHealthCheck({
+      project: project(meta()),
+      tools: { conan: tool('conan'), git: tool('git') },
+      state: { lastBuildOk: true, lastTestsOk: true },
+      coverage: { found: true, line: 90 },
+    });
+    const cov = full.checks.find((c) => c.id === 'coverage.enabled')!;
+    assert.strictEqual(cov.kind, 'ok');
+    assert.strictEqual(cov.grade, 1);
+    const bare = await runHealthCheck({
+      project: project(meta()),
+      tools: { conan: tool('conan'), git: tool('git') },
+      state: { lastBuildOk: true, lastTestsOk: true },
+      coverage: { found: false, line: null },
+    });
+    const covBare = bare.checks.find((c) => c.id === 'coverage.enabled')!;
+    assert.strictEqual(covBare.kind, 'warn');
+    assert.strictEqual(covBare.grade, 0.4, 'enabled-but-no-report is only 2/5');
+    const off = await runHealthCheck({ project: project(meta({ activate_code_coverage: false })), tools: {}, state: {} });
+    assert.strictEqual(off.checks.find((c) => c.id === 'coverage.enabled')?.grade, 0);
+  });
+
+  it('V5-6 graded scoring: tests — fail=0.2 · skip/low-count=0.7 · all green=1.0', async () => {
+    const run = (testsRun: { passed: number; failed: number; skipped: number }) =>
+      runHealthCheck({ project: project(meta()), tools: {}, state: { lastBuildOk: true, testsRun } });
+    const bad = await run({ passed: 4, failed: 2, skipped: 0 });
+    assert.strictEqual(bad.checks.find((c) => c.id === 'state.tests')?.grade, 0.2);
+    const skip = await run({ passed: 10, failed: 0, skipped: 3 });
+    assert.strictEqual(skip.checks.find((c) => c.id === 'state.tests')?.grade, 0.7);
+    const few = await run({ passed: 2, failed: 0, skipped: 0 });
+    assert.strictEqual(few.checks.find((c) => c.id === 'state.tests')?.grade, 0.7);
+    const green = await run({ passed: 12, failed: 0, skipped: 0 });
+    assert.strictEqual(green.checks.find((c) => c.id === 'state.tests')?.grade, 1);
+  });
+
+  it('V5-6 graded scoring: build success-without-tests is 0.75 (not full)', async () => {
+    const r = await runHealthCheck({
+      project: project(meta()),
+      tools: { conan: tool('conan'), git: tool('git') },
+      state: { lastBuildOk: true },
+    });
+    const build = r.checks.find((c) => c.id === 'state.build')!;
+    assert.strictEqual(build.grade, 0.75);
+    assert.strictEqual(build.kind, 'warn');
+  });
+
   it('verdictZh and healthGapLabels drive the hover 工程健康 row (V5-2)', async () => {
     assert.strictEqual(verdictZh('PASS'), '良好');
     assert.strictEqual(verdictZh('WARN'), '需改进');

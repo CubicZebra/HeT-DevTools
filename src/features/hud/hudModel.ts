@@ -27,6 +27,8 @@ export interface HudEnvRow {
   label: string;
   value: string;
   tone: Tone;
+  /** V5-7 dual-line: the REAL binding — absolute/lane path or source note. */
+  path?: string;
   /** Optional per-row action label (e.g. 详情/打开). */
   actionLabel?: string;
   /** Command to run when the row action is clicked. */
@@ -88,12 +90,16 @@ export function hudHtml(m: HudModel, fontSize: number): string {
     </div>`;
 
   const envRows = m.env
-    .map((r) => `<div class="env-row">
+    .map(
+      (r) => `<div class="env-row">
         <span class="dot ${toneClass(r.tone)}">${r.tone === 'ok' ? '✓' : r.tone === 'fail' ? '✗' : r.tone === 'warn' ? '!' : '·'}</span>
-        <span class="env-label">${esc(r.label)}</span>
-        <span class="env-value">${esc(r.value)}</span>
+        <div class="env-body">
+          <div class="env-line"><span class="env-label">${esc(r.label)}</span><span class="env-value">${esc(r.value)}</span></div>
+          ${r.path ? `<div class="env-path">${esc(r.path)}</div>` : ''}
+        </div>
         ${r.action ? `<button class="link" data-action="${esc(r.action)}">${esc(r.actionLabel ?? '打开')}</button>` : ''}
-      </div>`)
+      </div>`,
+    )
     .join('');
 
   const actions = m.actions
@@ -125,10 +131,12 @@ export function hudHtml(m: HudModel, fontSize: number): string {
     font-size: ${Math.max(10, Math.min(20, fontSize))}px;
     color: var(--vscode-foreground);
     background: var(--vscode-editorWidget-background);
-    margin: 0; padding: 16px;
+    margin: 0 auto; padding: 16px;
     border: 1px solid var(--vscode-widget-border, #333);
     border-radius: 12px;
-    min-width: 420px; max-width: 560px;
+    /* V5-7 (issue-4): responsive width — fill the window like a markdown doc,
+       cap at a readable width and centre on very wide windows. */
+    width: 100%; max-width: min(780px, calc(100vw - 32px));
   }
   .head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   .head h1 { font-size: 1.25em; margin: 0; flex: 1; }
@@ -136,7 +144,7 @@ export function hudHtml(m: HudModel, fontSize: number): string {
   .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
   .badge { border-radius: 10px; padding: 2px 10px; font-size: .78em; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
   .badge.ok { background:#388a34; color:#fff; } .badge.fail { background:#a1260d; color:#fff; } .badge.warn { background:#b8954a; color:#fff; }
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 10px; }
   .stat { display: flex; gap: 8px; align-items: center; background: var(--vscode-editor-background); border-radius: 8px; padding: 8px 10px; }
   .stat-icon { font-size: 1.5em; }
   .stat-value { font-weight: 700; font-size: 1.05em; }
@@ -145,12 +153,15 @@ export function hudHtml(m: HudModel, fontSize: number): string {
   .ok { color:#89d185; } .warn { color:#e2c08d; } .fail { color:#f14c4c; } .plain { opacity:.85; }
   h2 { font-size: .72em; text-transform: uppercase; letter-spacing: .5px; opacity: .7; margin: 14px 0 6px; }
   .env { background: var(--vscode-editor-background); border-radius: 8px; padding: 4px 10px; }
-  .env-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
-  .dot { width: 14px; text-align:center; }
+  .env-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+  .dot { width: 14px; text-align:center; flex: none; }
+  .env-body { flex: 1; min-width: 0; }
+  .env-line { display: flex; align-items: center; gap: 8px; }
   .env-label { flex: 1; }
-  .env-value { opacity: .8; font-size: .9em; }
+  .env-value { opacity: .85; font-size: .9em; }
+  .env-path { opacity: .55; font-size: .72em; margin-top: 1px; word-break: break-all; }
   .provider { display:flex; align-items:center; gap:6px; margin-top:8px; font-size:.82em; }
-  .acts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .acts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; }
   button.act {
     display:flex; align-items:center; gap:6px; justify-content:flex-start;
     background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground);

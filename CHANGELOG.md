@@ -2,6 +2,22 @@
 
 All notable changes follow [Conventional Commits](https://www.conventionalcommits.org/) + fcpp emoji superset.
 
+## [0.3.2] - 2026-09-07
+
+### Fixed
+
+- **conan 就绪始终为 ✗ 的根因（issue-3）**：`laneConanPresent` 之前用 `wsl.exe … bash "<字符串>"`（无 `-lc`）→ bash 把命令当**文件名**，恒 exit 127 = false，导致已成功构建却显示「托管环境 conan 未就绪」。同时 `getWslLaneStatus` 的内联 `-lc` 探测（`$lane` 双引号）经 wsl.exe 传递后失效 → HUD 的 CMake/Ninja 恒 ✗。**统一改为文件传输通道**（`runWslScript`），新增 `probeLaneDocsTools`；实测 lane conan 2.32 / cmake 4.4.3 / python 3.12 / sphinx 8.2 / doxygen 1.9.8 / dot / make 全部正确识别。
+- **体检粒度化打分（issue-3）**：覆盖率/测试/构建改为 0–1 分级（服务「稳定、可靠、有保障、经得起推敲」）：
+  - 覆盖率（5 分制）：未开启=0 · 已开启无报告=0.4（2/5）· ≥60%=0.6 · ≥80%=0.8 · ≥90%=1.0（5/5）；
+  - 单元/压力测试：失败=0.2 · 全绿但跳过/用例偏少=0.7 · 全绿=1.0；
+  - 构建：从未=0.2 · 失败=0.4 · 成功未跑测试=0.75 · 构建+测试全绿=1.0。
+  明细面板按 `得分/权重` 显示（如 2/5），gap 文案「覆盖率未达标」不再误报「未开」。
+- **文档中心改车道口径（issue-1）**：托管车道下工具表显示**车道**的 Python/Doxygen/Graphviz/Sphinx/make（含来源注记），不再报「Python ✗」「Graphviz 路径不匹配」（车道自动 reconcile `/usr/bin`）；native 回退原嗅探。
+- **文档构建进度可视化（issue-1）**：与 `conan create` 同款——chip 转圈 + 「构建文档」运行中提示、驾驶舱日志抽屉实时打印、文档面板内 Busy 提示。
+- **悬停卡快捷操作排版（issue-2）**：改为逐行 bullet（每个动作一行），不再挤成一行被截断。
+- **监控卡 HUD（issue-4）**：宽度自适应（`min(780px, calc(100vw-32px))` 居中，统计/动作网格 `auto-fit`）；环境条目**双行显示**（主行值 + 副行真实路径，如 `WSL2 车道 · ~/.het-fti/managed-env/venv/bin/conan`），一眼分辨车道托管 vs 本机工具。
+- **webview 设计语言统一（issue-5）**：覆盖率面板、工程健康明细改用共享 `pageShell/BASE_CSS`（卡片/行/chip/按钮/详情样式层级一致）。
+
 ## [0.3.1] - 2026-09-07
 
 ### Fixed

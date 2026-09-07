@@ -18,6 +18,8 @@ export interface HealthCheckItem {
   suggestion?: string;
   /** Contribution to the 100-point score when ok (warn = half, fail = 0). */
   weight: number;
+  /** V5-6: fine-grained 0..1 grade (coverage/tests/build are graded). */
+  grade?: number;
 }
 
 export interface HealthInput {
@@ -26,7 +28,11 @@ export interface HealthInput {
   state?: {
     lastBuildOk?: boolean;
     lastTestsOk?: boolean;
+    /** V5-6: actual last test counts (for graded 测试/构建 scoring). */
+    testsRun?: { passed: number; failed: number; skipped: number };
   };
+  /** V5-6: actual coverage report fact (for graded 覆盖率 scoring). */
+  coverage?: { found: boolean; line: number | null } | null;
   /** V5-2B: managed/WSL lane facts override raw which-sniffing where provided. */
   env?: {
     /** true = lane conan ready · false = lane missing conan · absent = system sniff. */
@@ -53,7 +59,7 @@ const GAP_LABELS: Record<string, string> = {
   'deps.buckets': '依赖桶不完整',
   'switches.ci': 'CI 开关全关',
   'tests.present': '测试未配置',
-  'coverage.enabled': '覆盖率未开',
+  'coverage.enabled': '覆盖率未达标',
   'docs.enabled': '文档未配置',
   'quality.config': '质量门禁缺失',
   'state.build': '构建未验证',
@@ -77,6 +83,8 @@ interface RuleResult {
   required?: boolean;
   detail: string;
   suggestion?: string;
+  /** V5-6: 0..1 fine grade — when set it drives kind + score (finer grading). */
+  grade?: number;
 }
 
 type RuleFn = (ctx: {
@@ -85,6 +93,7 @@ type RuleFn = (ctx: {
   tools?: Record<string, ToolStatus>;
   state?: HealthInput['state'];
   env?: HealthInput['env'];
+  coverage?: HealthInput['coverage'];
 }) => Promise<RuleResult>;
 
 const VERDICT_PASS = 80;
@@ -194,18 +203,40 @@ export async function runHealthCheck(input: HealthInput): Promise<HealthReport> 
         const dir = root ? await pathExists(join(root, 'test_package')) : false;
         const enabled = meta?.trigger_tests === true;
         if (enabled || dir) {
-          return { ok: true, detail: `${enabled ? 'trigger_tests 开启' : ''}${enabled && dir ? ' · ' : ''}${dir ? 'test_package 存在' : ''}` };
+          // V5-6 graded: configured & present = 0.8 (full 1.0 needs green runs).
+          return { ok: true, grade: 0.8, detail: `${enabled ? 'trigger_tests 开启' : ''}${enabled && dir ? ' · ' : ''}${dir ? 'test_package 存在' : ''}` };
         }
-        return { ok: false, required: false, detail: 'test_package 缺失且 trigger_tests 关闭', suggestion: '生成测试或开启 trigger_tests' };
+        return { ok: false, required: false, grade: 0.2, detail: 'test_package 缺失且 trigger_tests 关闭', suggestion: '生成测试或开启 trigger_tests' };
       },
     },
     {
       id: 'coverage.enabled',
-      title: '覆盖率开关',
+      title: '覆盖率实测',
       weight: 5,
       run: async () => {
-        if (meta?.activate_code_coverage) return { ok: true, detail: 'activate_code_coverage = true' };
-        return { ok: false, required: false, detail: '覆盖率未开启（Debug 构建可生成报告）', suggestion: '在“项目设置 → 测试与覆盖”开启' };
+        // V5-6 graded (user-specified 5分制): 开启无报告=0.4 · ≥60%=0.6 ·
+        // ≥80%=0.8 · ≥90%=1.0；未开启=0（并非“开了就满分”）。
+        const cov = input.coverage;
+        if (meta?.activate_code_coverage) {
+          if (cov?.found && cov.line !== null && cov.line !== undefined) {
+            const line = cov.line;
+            const grade = line >= 90 ? 1 : line >= 80 ? 0.8 : line >= 60 ? 0.6 : 0.4;
+            return {
+              ok: grade >= 0.8,
+              grade,
+              detail: `行覆盖 ${line}%（≥90% 满分 · ≥80% 良好 · ≥60% 合格）`,
+              suggestion: grade < 0.8 ? '补齐核心路径用例以提升覆盖率' : undefined,
+            };
+          }
+          return {
+            ok: false,
+            required: false,
+            grade: 0.4,
+            detail: '已开启但尚无覆盖率报告（构建并测覆盖率后生成）',
+            suggestion: '点击“生成覆盖率”',
+          };
+        }
+        return { ok: false, required: false, grade: 0, detail: '覆盖率未开启（Debug 构建可生成报告）', suggestion: '在“项目设置 → 测试与覆盖”开启' };
       },
     },
     {
@@ -233,10 +264,16 @@ export async function runHealthCheck(input: HealthInput): Promise<HealthReport> 
       title: '最近构建',
       weight: 10,
       run: async () => {
+        // V5-6 graded: 从未=0.2 · 失败=0.4 · 成功未跑测试=0.75 · 构建+测试全绿=1.0
         const s = input.state?.lastBuildOk;
-        if (s === true) return { ok: true, detail: '最近一次构建成功' };
-        if (s === false) return { ok: false, required: true, detail: '最近一次构建失败', suggestion: '打开“构建”查看错误并修复' };
-        return { ok: false, required: false, detail: '尚未构建过', suggestion: '点击“构建项目”' };
+        const t = input.state?.testsRun;
+        const green = t ? t.failed === 0 : input.state?.lastTestsOk === true;
+        if (s === true) {
+          if (green) return { ok: true, grade: 1, detail: '最近构建成功且测试全绿' };
+          return { ok: true, required: false, grade: 0.75, detail: '最近构建成功但尚未跑测试', suggestion: '运行“构建并测试”以闭环' };
+        }
+        if (s === false) return { ok: false, required: true, grade: 0.4, detail: '最近一次构建失败', suggestion: '打开“构建”查看错误并修复' };
+        return { ok: false, required: true, grade: 0.2, detail: '尚未构建过', suggestion: '点击“构建项目”' };
       },
     },
     {
@@ -244,18 +281,47 @@ export async function runHealthCheck(input: HealthInput): Promise<HealthReport> 
       title: '最近测试',
       weight: 5,
       run: async () => {
+        // V5-6 graded (单元/压力测试同源): 失败=0.2 · 全绿但跳过/用例少=0.7 · 全绿=1.0
+        const t = input.state?.testsRun;
+        if (t) {
+          if (t.failed > 0) {
+            return { ok: false, required: false, grade: 0.2, detail: `最近测试存在失败（通过 ${t.passed} · 失败 ${t.failed}）`, suggestion: '在测试浏览器中查看' };
+          }
+          if (t.skipped > 0) {
+            return { ok: true, required: false, grade: 0.7, detail: `全绿但跳过 ${t.skipped} 个用例（可减少跳过以获满分）` };
+          }
+          if (t.passed < 3) {
+            return { ok: true, required: false, grade: 0.7, detail: `全绿但用例偏少（${t.passed} 个通过）`, suggestion: '补充单元/压力用例' };
+          }
+          return { ok: true, grade: 1, detail: `单元/压力测试全绿（通过 ${t.passed}）` };
+        }
         const s = input.state?.lastTestsOk;
-        if (s === true) return { ok: true, detail: '最近一次测试全绿' };
-        if (s === false) return { ok: false, required: false, detail: '最近一次测试存在失败', suggestion: '在测试浏览器中查看' };
-        return { ok: false, required: false, detail: '尚未运行测试', suggestion: '构建并测试' };
+        if (s === true) return { ok: true, grade: 1, detail: '最近一次测试全绿' };
+        if (s === false) return { ok: false, required: false, grade: 0.2, detail: '最近一次测试存在失败', suggestion: '在测试浏览器中查看' };
+        return { ok: false, required: false, grade: 0.2, detail: '尚未运行测试', suggestion: '构建并测试' };
       },
     },
   ];
 
   const checks: HealthCheckItem[] = [];
   for (const rule of rules) {
-    const result = await rule.run({ meta, root, tools: input.tools, state: input.state, env: input.env });
-    const kind: CheckKind = result.ok ? 'ok' : result.required ? 'fail' : 'warn';
+    const result = await rule.run({ meta, root, tools: input.tools, state: input.state, env: input.env, coverage: input.coverage });
+    // V5-6 graded rules: kind derived from the fine grade (≥0.8 ok · ≥0.5 warn
+    // · optional low → warn · required low → fail).
+    const kind: CheckKind =
+      result.grade !== undefined
+        ? result.grade >= 0.8
+          ? 'ok'
+          : result.grade >= 0.5
+            ? 'warn'
+            : result.required
+              ? 'fail'
+              : 'warn'
+        : result.ok
+          ? 'ok'
+          : result.required
+            ? 'fail'
+            : 'warn';
     checks.push({
       id: rule.id,
       title: rule.title,
@@ -263,12 +329,13 @@ export async function runHealthCheck(input: HealthInput): Promise<HealthReport> 
       detail: result.detail,
       suggestion: result.suggestion,
       weight: rule.weight,
+      grade: result.grade,
     });
   }
 
   let raw = 0;
   for (const c of checks) {
-    raw += c.kind === 'ok' ? c.weight : c.kind === 'warn' ? c.weight * 0.5 : 0;
+    raw += c.grade !== undefined ? c.weight * c.grade : c.kind === 'ok' ? c.weight : c.kind === 'warn' ? c.weight * 0.5 : 0;
   }
   const score = Math.round(raw);
   const verdict = score >= VERDICT_PASS ? 'PASS' : score >= VERDICT_WARN ? 'WARN' : 'FAIL';
