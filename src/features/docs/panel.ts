@@ -44,12 +44,31 @@ export function showDocsPanel(context: vscode.ExtensionContext, deps: DocsDeps):
     panel.webview.html = buildHtml(state);
   };
 
-  panel.webview.onDidReceiveMessage(async (message: { type: string; rel?: string }) => {
+  panel.webview.onDidReceiveMessage(async (message: { type: string; rel?: string; family?: string }) => {
     if (message.type === 'refresh') {
       await render();
     } else if (message.type === 'runDocs') {
       const r = await deps.runDocs();
-      void vscode.window.showInformationMessage(r.message);
+      const st = await deps.getState();
+      const hasSph = st.artifacts.some((a) => a.rel.startsWith('docs/sphinx/'));
+      const hasDox = st.artifacts.some((a) => a.rel.startsWith('docs/doxygen/'));
+      const buttons: string[] = [];
+      if (hasSph) {
+        buttons.push('打开 Sphinx 文档');
+      }
+      if (hasDox) {
+        buttons.push('打开 Doxygen 文档');
+      }
+      if (r.ok && buttons.length > 0) {
+        const pick = await vscode.window.showInformationMessage(r.message, ...buttons);
+        if (pick === '打开 Sphinx 文档') {
+          void vscode.commands.executeCommand('het.openDocsArtifact', 'sphinx');
+        } else if (pick === '打开 Doxygen 文档') {
+          void vscode.commands.executeCommand('het.openDocsArtifact', 'doxygen');
+        }
+      } else {
+        void vscode.window.showInformationMessage(r.message);
+      }
       await render();
     } else if (message.type === 'fixGraphviz') {
       const r = await deps.fixGraphviz();
@@ -57,6 +76,8 @@ export function showDocsPanel(context: vscode.ExtensionContext, deps: DocsDeps):
       await render();
     } else if (message.type === 'openArtifact' && message.rel) {
       await deps.openArtifact(message.rel);
+    } else if (message.type === 'openFamily' && message.family) {
+      await vscode.commands.executeCommand('het.openDocsArtifact', message.family);
     }
   });
 
@@ -105,6 +126,14 @@ sudo apt install doxygen graphviz make python3-sphinx</pre></div></div>`
           )
           .join('');
 
+  const hasDox = state.artifacts.some((a) => a.rel.startsWith('docs/doxygen/'));
+  const hasSph = state.artifacts.some((a) => a.rel.startsWith('docs/sphinx/'));
+  const entryRow = `<div class="row">
+      <button data-action="openFamily" data-family="doxygen" ${hasDox ? '' : 'disabled'}>打开 Doxygen 文档</button>
+      <button data-action="openFamily" data-family="sphinx" ${hasSph ? '' : 'disabled'}>打开 Sphinx 文档</button>
+      <span class="tag">${hasDox || hasSph ? '构建成功即可点击（默认浏览器打开）' : '未发现产物（构建成功后点亮）'}</span>
+    </div>`;
+
   return pageShell(
     '文档中心',
     `
@@ -113,6 +142,7 @@ sudo apt install doxygen graphviz make python3-sphinx</pre></div></div>`
         padding: 8px 10px; margin: 8px 0; font-size: 12px; }
       .tag { font-size: 11px; opacity: .75; }
       .fname { flex: 1; font-size: 12px; }
+      button[disabled] { opacity: .4; pointer-events: none; }
       pre { background: var(--vscode-textCodeBlock-background,#111); padding: 8px; border-radius: 6px; font-size: 11px; }
       code { background: var(--vscode-textCodeBlock-background,#111); padding: 1px 5px; border-radius: 4px; }
     </style>
@@ -130,6 +160,8 @@ sudo apt install doxygen graphviz make python3-sphinx</pre></div></div>`
         <button data-action="runDocs">📖 一键生成文档</button>
         <button data-action="refresh" class="secondary">🔄 刷新</button>
       </div>
+      <h2>快捷入口</h2>
+      ${entryRow}
       <h2>产物</h2>
       ${artifacts}
     </div>
@@ -141,6 +173,8 @@ sudo apt install doxygen graphviz make python3-sphinx</pre></div></div>`
             const act = b.getAttribute('data-action');
             if (act === 'openArtifact') {
               vscode.postMessage({ type: 'openArtifact', rel: b.getAttribute('data-rel') });
+            } else if (act === 'openFamily') {
+              vscode.postMessage({ type: 'openFamily', family: b.getAttribute('data-family') });
             } else {
               vscode.postMessage({ type: act });
             }

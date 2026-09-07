@@ -2,6 +2,17 @@
 
 All notable changes follow [Conventional Commits](https://www.conventionalcommits.org/) + fcpp emoji superset.
 
+## [0.3.0] - 2026-09-07
+
+### Added
+
+- **悬停小卡片控制台（V5-2）**：chip 悬停升级为可交互「项目/状态」七行闭环（开发环境 / 构建结果 / 测试中心 / 技术文档 / 代码覆盖 / 模板同步 / 工程健康——四字标签、总括置后）；每行带 `command:` 链接（Copilot 同款，悬停常驻、点击即执行、移出即消失）；技术文档行成功后刷出 `[Doxygen] [Sphinx]` 产物入口、失败可跳文档中心；工程健康行极简显示（分数/判定/项数 + `[体检]`/`[明细]`），可提升标签以独立 hint 行呈现避免撑破表格。
+- **健康维度细化（电脑管家式体检）**：体检缓存扩为完整 report；新增判定词与 ≤3 可提升标签（fail→warn→权重排序）；`het.healthReport` 体检明细面板（12 项得分/颜色/建议 + 重新体检）。
+- **环境展示对齐新设计语言（V5-2B）**：总览页移除旧 generic 嗅探明细/运行时行/工具 chips，只展示 Provider 决策 → 托管环境 → WSL/macOS 车道 → 手动覆盖（仅非空 `het.tools`）；新增单一环境样本（`envSample`），体检 conan 判据接车道事实。
+- **metadata 人类可读 + 无 .bak（V5-3）**：`metadata.json` 写回全部手术式（只动被改字段、保留 fcpp 原排版，新项目即模板原样 + 手术改写）；fcpp 风格序列化器兜底；全链路不再产生 `.bak`。
+- **文档环境闭环（V5-4）**：Windows + managed 文档构建全程走 WSL2 车道（venv `numpy/sphinx/sphinx-intl/sphinx-rtd-theme` + 免密 root apt 自愈 `doxygen/graphviz/make`，不碰发行版 conda 环境）；车道就绪自动手术式覆写 `graphviz_bin=/usr/bin`。
+- **文档产物入口（V5-5）**：文档面板 Doxygen/Sphinx 分开按钮（无产物灰、成功点亮，默认浏览器打开）；构建成功 toast 带「打开 Sphinx/Doxygen 文档」动作；悬停卡文档行同源。
+
 ## [0.2.0] - 2026-09-07
 
 ### Added
