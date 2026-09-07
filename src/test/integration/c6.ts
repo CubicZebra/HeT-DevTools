@@ -46,6 +46,12 @@ export async function run(): Promise<void> {
     assert.strictEqual(chip.command, 'het.chipOverview', 'project chip opens the monitor overview');
     assert.ok(chip.tooltip.includes('$('), 'tooltip must carry $(icon) tokens');
     assert.ok(!chip.tooltip.includes('het.newProject'), 'monitoring chip must not offer new project');
+    // V5-2 hover console: 项目/状态 table + command links + health row.
+    assert.ok(chip.tooltip.includes('| 项目 | 状态 |'), 'hover console is a 项目/状态 table');
+    assert.ok(chip.tooltip.includes('工程健康'), 'health total row rendered last');
+    assert.ok(chip.tooltip.includes('command:het.test'), 'build action link present');
+    assert.ok(chip.tooltip.includes('command:het.envCheck'), 'env action link present');
+    assert.ok(chip.tooltip.includes('command:het.healthCheck'), 'health rescore link present');
 
     // open dashboard at the deps section (anchor semantics)
     await vscode.commands.executeCommand('het.dashboard', ['deps']);
@@ -59,7 +65,12 @@ export async function run(): Promise<void> {
     const cmds = await vscode.commands.getCommands(true);
     assert.ok(cmds.includes('het.refreshConanIndex'), 'het.refreshConanIndex must be registered');
     assert.ok(cmds.includes('het.addDependency'), 'het.addDependency must be registered');
-    console.log('[c6] project-phase OK — chip overview + dashboard deps focus + deps commands registered');
+    // V5-2 console commands are registered
+    assert.ok(cmds.includes('het.envCheck'), 'het.envCheck must be registered');
+    assert.ok(cmds.includes('het.openDocsArtifact'), 'het.openDocsArtifact must be registered');
+    assert.ok(cmds.includes('het.openBuildOutput'), 'het.openBuildOutput must be registered');
+    assert.ok(cmds.includes('het.healthReport'), 'het.healthReport must be registered');
+    console.log('[c6] project-phase OK — chip hover console + dashboard deps focus + deps commands registered');
   }
   console.log('[c6] OK');
 }

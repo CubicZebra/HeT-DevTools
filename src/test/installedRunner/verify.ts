@@ -98,11 +98,19 @@ export async function run(): Promise<void> {
     assert.strictEqual(chip.command, 'het.chipOverview', 'project chip opens the monitor overview');
     assert.ok(chip.tooltip.includes('$('), 'tooltip must carry $(icon) tokens');
     assert.ok(!chip.tooltip.includes('het.newProject'), 'monitoring chip must not offer new project');
+    // V5-2 hover console
+    assert.ok(chip.tooltip.includes('| 项目 | 状态 |'), 'hover console table');
+    assert.ok(chip.tooltip.includes('工程健康'), 'health row present');
+    assert.ok(chip.tooltip.includes('command:het.healthCheck'), 'health rescore link');
     await vscode.commands.executeCommand('het.dashboard', ['deps']);
     await hold();
     const st = (await vscode.commands.executeCommand('het.getCockpitState')) as { page: string };
     assert.strictEqual(st.page, 'deps', 'dashboard deps section focused');
-    log('[verify-installed] proj-phase OK — detect + chip overview + dashboard deps focus');
+    const all = (await vscode.commands.getCommands(true)) as string[];
+    for (const c of ['het.envCheck', 'het.openDocsArtifact', 'het.openBuildOutput', 'het.healthReport']) {
+      assert.ok(all.includes(c), `${c} must be registered`);
+    }
+    log('[verify-installed] proj-phase OK — hover console + detect + dashboard deps focus');
   } else if (phase === 'scrub') {
     assert.ok(PROJ.length > 0, 'HET_VERIFY_DEST required');
     assert.ok(!(process.env.PATH ?? '').toLowerCase().includes('miniforge'), 'test PATH must be scrubbed first');
