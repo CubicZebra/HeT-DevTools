@@ -16,6 +16,8 @@ import { rmSync, writeFileSync } from 'node:fs';
 import type { BuildSummary } from '../../core/conanService';
 import {
   wslLaneBuildCommand,
+  wslLaneDocsEnsureCommand,
+  wslLaneDocsRunCommand,
   wslLaneEnsureCommand,
   wslLaneLayout,
   wslLaneProfile,
@@ -126,6 +128,78 @@ export async function runWslConanCreate(
   const { home } = await ensureWslLane(distro);
   const cwdWsl = toWslPath(cwdWin);
   const cmd = wslLaneBuildCommand(cwdWsl, home, opts.buildType ?? 'Debug');
+  const tmp = writeWslTempScript(cmd);
+  let stdout = '';
+  let stderr = '';
+  try {
+    const r = await run('wsl.exe', wslRunArgs(distro, 'bash', [tmp.wsl], cwdWsl), {
+      timeoutMs: opts.timeoutMs ?? 0,
+      onStdout: (c) => {
+        stdout += c;
+        opts.onStdout?.(c);
+      },
+      onStderr: (c) => {
+        stderr += c;
+        opts.onStderr?.(c);
+      },
+    });
+    return { ok: r.code === 0, code: r.code, stdout: wslOutToWin(stdout), stderr: wslOutToWin(stderr) };
+  } finally {
+    rmSync(tmp.win, { force: true });
+  }
+}
+
+let docsCache: { at: number; home: string } | null = null;
+
+/** Root-level system packages the docs stack needs (idempotent, quiet). */
+function aptDocsInstallArgs(distro: string): string[] {
+  return ['-d', distro, '-u', 'root', '--', 'bash', '-lc',
+    'export DEBIAN_FRONTEND=noninteractive; ' +
+      'if ! command -v doxygen >/dev/null 2>&1 || ! command -v dot >/dev/null 2>&1 || ! command -v make >/dev/null 2>&1; then ' +
+      'apt-get update -qq >/dev/null 2>&1 || true; apt-get install -y -qq doxygen graphviz make >/dev/null 2>&1 || true; fi',
+  ];
+}
+
+/**
+ * V5-4: ensure the lane DOCS stack — venv sphinx packages (pip, user) plus
+ * system doxygen/graphviz/make (passwordless-root apt self-heal). Never
+ * touches the distro's conda envs. Cached 60 s; throws with the output tail.
+ */
+export async function ensureWslDocs(distro: string): Promise<void> {
+  if (docsCache && Date.now() - docsCache.at < 60_000) {
+    return;
+  }
+  const home = await distroHome(distro);
+  // System tools first (root self-heal when any is missing).
+  await run('wsl.exe', aptDocsInstallArgs(distro), { timeoutMs: 15 * 60_000 });
+  // Then the venv docs packages + report (user level).
+  const cmd = wslLaneDocsEnsureCommand(home);
+  const tmp = writeWslTempScript(cmd);
+  try {
+    const r = await run('wsl.exe', wslRunArgs(distro, 'bash', [tmp.wsl]), { timeoutMs: 20 * 60_000 });
+    if (r.code !== 0) {
+      const tail = `${r.stdout}\n${r.stderr}`.split(/\r?\n/u).filter((s) => s.trim().length > 0).slice(-8).join('\n');
+      throw new Error(`WSL 文档工具链准备失败（exit=${r.code}）：\n${tail}`);
+    }
+    if (!/docs_sphinx:.+/.test(r.stdout) || !/docs_doxygen:.+/.test(r.stdout) || !/docs_dot:.+/.test(r.stdout) || !/docs_make:.+/.test(r.stdout)) {
+      throw new Error(`WSL 文档工具未齐备：\n${r.stdout.slice(-800)}`);
+    }
+  } finally {
+    rmSync(tmp.win, { force: true });
+  }
+  docsCache = { at: Date.now(), home };
+}
+
+/** V5-4: run `python docs/build.py` inside the lane (venv python + system tools). */
+export async function runWslDocs(
+  distro: string,
+  cwdWin: string,
+  opts: { onStdout?: (c: string) => void; onStderr?: (c: string) => void; timeoutMs?: number } = {},
+): Promise<BuildSummary> {
+  const { home } = await ensureWslLane(distro);
+  await ensureWslDocs(distro);
+  const cwdWsl = toWslPath(cwdWin);
+  const cmd = wslLaneDocsRunCommand(cwdWsl, home);
   const tmp = writeWslTempScript(cmd);
   let stdout = '';
   let stderr = '';

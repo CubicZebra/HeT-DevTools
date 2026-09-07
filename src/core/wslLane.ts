@@ -110,6 +110,42 @@ export function wslLaneBuildCommand(cwdWsl: string, home: string, buildType = 'D
   ].join('\n');
 }
 
+/** V5-4: pip packages for the docs stack (loose pins, per the manifest). */
+export const WSL_DOCS_PIP = ['"numpy>=1.26"', '"sphinx>=8,<9"', 'sphinx-intl', '"sphinx-rtd-theme>=2,<4"'];
+
+/**
+ * V5-4: idempotent docs-stack bootstrap inside the lane venv (runs as the
+ * default user). System packages (doxygen/graphviz/make) are installed by the
+ * host via passwordless root apt — never through the user's conda envs.
+ */
+export function wslLaneDocsEnsureCommand(home: string): string {
+  const l = wslLaneLayout(home);
+  const venvBin = posix.join(l.venv, 'bin');
+  return [
+    'set -e',
+    `export PATH="${venvBin}:$PATH"`,
+    `if [ ! -x "${posix.join(venvBin, 'sphinx-build')}" ]; then`,
+    `  "${posix.join(venvBin, 'pip')}" install --disable-pip-version-check -q ${WSL_DOCS_PIP.join(' ')}`,
+    'fi',
+    `echo docs_sphinx:$([ -x "${posix.join(venvBin, 'sphinx-build')}" ] && sphinx-build --version | head -1 || echo -)`,
+    'echo docs_doxygen:$([ -x /usr/bin/doxygen ] && doxygen --version || echo -)',
+    'echo docs_dot:$([ -x /usr/bin/dot ] && dot -V 2>&1 | head -1 || echo -)',
+    'echo docs_make:$([ -x /usr/bin/make ] && make --version | head -1 || echo -)',
+  ].join('\n');
+}
+
+/** V5-4: `python docs/build.py` inside the lane (venv python + system tools). */
+export function wslLaneDocsRunCommand(cwdWsl: string, home: string): string {
+  const l = wslLaneLayout(home);
+  return [
+    'set -o pipefail',
+    `export PATH="${posix.join(l.venv, 'bin')}:/usr/bin:/bin:$PATH"`,
+    'unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_PROMPT_MODIFIER 2>/dev/null || true',
+    `cd "${cwdWsl}"`,
+    'python docs/build.py',
+  ].join('\n');
+}
+
 /**
  * Map WSL-side compiler paths back to Windows drive paths for the Problems
  * panel: `/mnt/c/Users/…/src/a.cpp` → `C:/Users/…/src/a.cpp`. Linux-only

@@ -3,6 +3,8 @@ import {
   WSL_CC,
   WSL_CXX,
   wslLaneBuildCommand,
+  wslLaneDocsEnsureCommand,
+  wslLaneDocsRunCommand,
   wslLaneEnsureCommand,
   wslLaneLayout,
   wslLaneProfile,
@@ -69,5 +71,26 @@ describe('V5-1 wslLane (WSL2 managed build lane pure helpers)', () => {
     );
     assert.strictEqual(wslOutToWin('/home/chen/.conan2/p/x'), '/home/chen/.conan2/p/x');
     assert.strictEqual(wslOutToWin('src/etl.cpp:5: error: y'), 'src/etl.cpp:5: error: y');
+  });
+
+  it('V5-4 docs ensure installs the sphinx stack into the venv only', () => {
+    const c = wslLaneDocsEnsureCommand('/home/chen');
+    assert.ok(c.includes('"numpy>=1.26"'));
+    assert.ok(c.includes('"sphinx>=8,<9"'));
+    assert.ok(c.includes('sphinx-intl'));
+    assert.ok(c.includes('"sphinx-rtd-theme>=2,<4"'));
+    assert.ok(c.includes('sphinx-build'));
+    assert.ok(c.includes('docs_doxygen'));
+    assert.ok(c.includes('docs_dot'));
+    assert.ok(!c.includes('conda activate'), 'never touches conda envs');
+    assert.ok(!c.includes('pip install --user'));
+  });
+
+  it('V5-4 docs run executes python docs/build.py inside the lane', () => {
+    const c = wslLaneDocsRunCommand('/mnt/c/proj', '/home/chen');
+    assert.ok(c.includes('/home/chen/.het-fti/managed-env/venv/bin:/usr/bin:/bin'));
+    assert.ok(c.includes('cd "/mnt/c/proj"'));
+    assert.ok(c.includes('python docs/build.py'));
+    assert.ok(c.includes('unset CONDA_PREFIX CONDA_DEFAULT_ENV'));
   });
 });

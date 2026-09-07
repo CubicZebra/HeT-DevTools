@@ -56,7 +56,7 @@ import { getCurrentProvisionPlan, getHostCapabilities } from './features/env/pro
 import { providerLabel, ProvisionPrefs } from './core/provisionPlan';
 import { currentManagedStatus, managedGc, managedPrepare, managedRemove } from './features/env/managedProvisioner';
 import { getWslLaneStatus } from './features/env/wslProbe';
-import { runWslConanCreate } from './features/env/wslLane';
+import { runWslConanCreate, runWslDocs } from './features/env/wslLane';
 import { collectEnvSample, envConanFact } from './features/env/envSample';
 import { parseProjectToolchain } from './core/projectToolchain';
 import { getMacosLaneStatus } from './features/env/macosProbe';
@@ -1342,9 +1342,23 @@ function openCoveragePanel(context: vscode.ExtensionContext): void {
   showCoveragePanel(context, { getState, toggle, runCoverage });
 }
 
+/** V5-4: lane-ready ⇒ graphviz_bin is `/usr/bin` (Linux dot dir) — overwrite
+ *  surgically (fcpp formatting preserved, no .bak) only when it differs. */
+async function reconcileGraphvizForLane(root: string): Promise<void> {
+  try {
+    const meta = (await loadMetadata(root)) as { graphviz_bin?: string };
+    const cur = (meta.graphviz_bin ?? '').trim();
+    if (cur && cur !== '/usr/bin') {
+      const applied = await applyMetadataPatch(root, { graphviz_bin: '/usr/bin' }, { persist: true });
+      log(applied.ok ? `[docs] graphviz_bin → /usr/bin（WSL2 车道，原 ${cur}）` : '[docs] graphviz_bin 覆写失败');
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
 /** Docs center (G-10): run docs/build.py, D-10 graphviz banner, open artifacts. */
-function openDocsPanel(context: vscode.ExtensionContext): void {
-  const locateArtifacts = async (root: string): Promise<{ rel: string; abs: string }[]> => {
+function openDocsPanel(context: vscode.ExtensionContext): void {  const locateArtifacts = async (root: string): Promise<{ rel: string; abs: string }[]> => {
     const { readdir } = await import('node:fs/promises');
     const hits: { rel: string; abs: string }[] = [];
     const walk = async (dir: string, relBase: string, depth: number): Promise<void> => {
@@ -1405,6 +1419,41 @@ function openDocsPanel(context: vscode.ExtensionContext): void {
     const root = currentProject?.root;
     if (!root) {
       return { ok: false, message: '未检测到 fcpp 项目。' };
+    }
+    // V5-4: Windows + managed → build docs INSIDE the WSL2 lane (docs stack is
+    // self-provisioned: venv sphinx/numpy + apt doxygen/graphviz/make).
+    if (process.platform === 'win32' && currentProject && (await projectToolchainFor(currentProject)) !== 'system') {
+      const plan = await getCurrentProvisionPlan(false, provisionPrefs()).catch(() => null);
+      const wsl = await getWslLaneStatus(false).catch(() => null);
+      if (plan?.provider === 'win-wsl2' && wsl?.available && wsl.distro) {
+        await reconcileGraphvizForLane(root);
+        channel?.appendLine(`[docs] WSL2 车道文档构建：distro=${wsl.distro} · ${root}`);
+        let summary;
+        try {
+          summary = await runWslDocs(wsl.distro, root, {
+            onStdout: (c) => channel?.append(c),
+            onStderr: (c) => channel?.append(c),
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          channel?.appendLine(msg);
+          lastDocs = { ok: false, at: Date.now() };
+          void refreshChip();
+          return { ok: false, message: msg };
+        }
+        const artifacts = await locateArtifacts(root);
+        const ok = summary.ok;
+        log(`[docs] lane finished ok=${ok} artifacts=${artifacts.length}`);
+        lastDocs = { ok, at: Date.now() };
+        void refreshChip();
+        if (!ok) {
+          return { ok: false, message: '文档生成失败（车道）：请查看“输出 → HeT DevTools”。' };
+        }
+        return { ok: true, message: `文档生成完成，找到 ${artifacts.length} 个产物页面（WSL2 车道）。` };
+      }
+      if (plan?.provider === 'win-wsl2-pending') {
+        return { ok: false, message: 'managed 文档构建需要 WSL2 发行版（当前无可用发行版）。请先 wsl --install -d Ubuntu-24.04，或把 metadata.toolchain 设为 system。' };
+      }
     }
     const python = await which('python');
     if (!python) {
