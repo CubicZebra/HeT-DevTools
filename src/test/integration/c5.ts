@@ -12,7 +12,7 @@
 import * as assert from 'node:assert';
 import * as vscode from 'vscode';
 
-const EXTENSION_ID = 'het-fti.het-devtools';
+const EXTENSION_ID = 'het-test-publisher.het-devtools';
 const phase = process.env.HET_C5_PHASE ?? 'empty';
 
 interface CockpitStateShape {

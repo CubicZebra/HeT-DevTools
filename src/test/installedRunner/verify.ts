@@ -18,7 +18,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
 
-const HET = 'het-fti.het-devtools';
+const HET = 'het-test-publisher.het-devtools';
 const phase = process.env.HET_VERIFY_PHASE ?? 'empty';
 const PROJ = process.env.HET_VERIFY_DEST ?? '';
 

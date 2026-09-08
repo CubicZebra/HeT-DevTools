@@ -12,7 +12,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
 
-const EXTENSION_ID = 'het-fti.het-devtools';
+const EXTENSION_ID = 'het-test-publisher.het-devtools';
 
 export async function run(): Promise<void> {
   console.log('[integration-smoke] starting');
@@ -27,7 +27,7 @@ export async function run(): Promise<void> {
   // Read via a registered command (deterministic; ext.exports can be flaky).
   const activationLine = (await vscode.commands.executeCommand<string>('het.getActivationLine')) ?? '';
   assert.ok(
-    activationLine.includes('activated \u2014 het-fti.het-devtools'),
+    activationLine.includes('activated \u2014 het-test-publisher.het-devtools'),
     'expected activation line, got: ' + activationLine,
   );
   // Durable evidence for the outer runner (host stdout forwarding is unreliable).

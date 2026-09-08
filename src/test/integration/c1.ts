@@ -11,7 +11,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
 
-const EXTENSION_ID = 'het-fti.het-devtools';
+const EXTENSION_ID = 'het-test-publisher.het-devtools';
 
 export async function run(): Promise<void> {
   console.log('[c1] starting');

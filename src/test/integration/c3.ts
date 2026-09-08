@@ -26,7 +26,7 @@ import {
 } from '../../core/qualityGates';
 import { composeHeader } from '../../core/commitAssistant';
 
-const EXTENSION_ID = 'het-fti.het-devtools';
+const EXTENSION_ID = 'het-test-publisher.het-devtools';
 const PANELS = [
   'het.docs',
   'het.quality',
