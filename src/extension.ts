@@ -1539,11 +1539,21 @@ function openDocsPanel(context: vscode.ExtensionContext): void {  const locateAr
     }
     // macOS / multi-python hosts: docs/build.py imports numpy on its first
     // lines, so the native path must pick a python/python3 that can REALLY
-    // `import numpy` (CI installs sphinx+numpy into the conan venv; if a
-    // system python shadows it on PATH, which('python') returns the wrong one).
-    // None capable → fall back to the first candidate and let build.py surface
-    // the raw missing-dependency error (the tail logs the chosen interpreter).
-    const candidates = [...new Set([await which('python'), await which('python3')].filter((p): p is string => !!p))];
+    // `import numpy`. CI installs sphinx+numpy into the conan venv, so the
+    // FIRST candidate is the interpreter that OWNS the resolved conan runtime
+    // (its sibling `python`) — deterministic even when the host process PATH
+    // is re-ordered/re-inherited (macOS Code/test-electron) and a system
+    // python shadows the venv for which('python'). Falls back to PATH
+    // python/python3, then to the first candidate if none imports numpy (so
+    // build.py surfaces the raw missing-dependency error in the tail).
+    const docsPyCands: (string | null)[] = [];
+    const rt = await resolveConanRuntime().catch(() => null);
+    if (rt?.exe) {
+      const conanDir = dirname(rt.exe);
+      docsPyCands.push(join(conanDir, 'python'), join(conanDir, 'python3'));
+    }
+    docsPyCands.push(await which('python'), await which('python3'));
+    const candidates = [...new Set(docsPyCands.filter((p): p is string => !!p))];
     let python: string | null = null;
     for (const cand of candidates) {
       try {
