@@ -126,9 +126,10 @@ export async function run(): Promise<void> {
     console.log('[real] coverage lines pct ≈ ' + pct);
   }
 
-  // Decision 3: docs through the real host on BOTH platforms.
-  console.log('[real] running het.docs (REAL docs build)…');
-  const docsResult = (await vscode.commands.executeCommand('het.docs')) as { ok: boolean; message: string } | undefined;
+  // Decision 3: docs through the real host on BOTH platforms. het.docs opens
+  // the panel; het.docsRun drives the SAME runner headlessly (lane/native).
+  console.log('[real] running het.docsRun (REAL docs build)…');
+  const docsResult = (await vscode.commands.executeCommand('het.docsRun')) as { ok: boolean; message: string } | undefined;
   const projRoot = join(ext.extensionPath, 'out', 'real-proj');
   const doxHtml = findUnder(join(projRoot, 'docs', 'doxygen'), 'docs.html', true) ?? findUnder(join(projRoot, 'docs', 'doxygen'), 'index.html', true);
   const sphHtml = findUnder(join(projRoot, 'docs', 'sphinx'), 'index.html', true);

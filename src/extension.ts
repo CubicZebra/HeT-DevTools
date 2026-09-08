@@ -92,6 +92,9 @@ let lastHealthReport: HealthReport | null = null;
 let lastDocs: { ok: boolean; at: number } | null = null;
 /** V5-6: docs build in flight (chip spinner + cockpit log drawer sync). */
 let docsRunning = false;
+/** P2: headless docs-run binding (set when the docs center opens) + output tail. */
+let docsRunImpl: (() => Promise<{ ok: boolean; message: string }>) | null = null;
+let lastDocsOutput = '';
 /** V5-6: parsed coverage % from the located report (cached 30 s). */
 let coverageProbeCache: { at: number; found: boolean; line: number | null; func: number | null } | null = null;
 /** V5-2: short-lived env sample summary cache for the 开发环境 row. */
@@ -789,6 +792,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.generateTests', () => openTestgenPanel(context)),
     vscode.commands.registerCommand('het.coverage', () => openCoveragePanel(context)),
     vscode.commands.registerCommand('het.docs', () => { track('docs'); return openDocsPanel(context); }),
+    vscode.commands.registerCommand('het.docsRun', async () => {
+      track('docs');
+      if (!docsRunImpl) {
+        try {
+          // Opening the center binds docsRunImpl synchronously (panel creation
+          // may itself fail headless — the binding still happens first).
+          openDocsPanel(context);
+        } catch {
+          /* fall through: rely on the binding made before showDocsPanel */
+        }
+      }
+      if (!docsRunImpl) {
+        return { ok: false, message: '文档中心未初始化：请先运行 het.docs 再调用 het.docsRun。' };
+      }
+      return docsRunImpl();
+    }),
+    vscode.commands.registerCommand('het.getLastDocsOutput', () => lastDocsOutput.slice(-3000)),
     vscode.commands.registerCommand('het.quality', () => { track('quality'); return openQualityPanel(context); }),
     vscode.commands.registerCommand('het.commit', () => openCommitPanel(context)),
     vscode.commands.registerCommand('het.commitRelease', () => openCommitPanel(context, { type: 'chore', emoji: ':package:', subject: 'bump version' })),
@@ -1440,6 +1460,7 @@ function openDocsPanel(context: vscode.ExtensionContext): void {  const locateAr
     }
     // V5-6: visible progress — chip spinner + cockpit log drawer, exactly like
     // `conan create` (user feedback: docs build must show busy + explanations).
+    lastDocsOutput = '';
     docsRunning = true;
     void refreshChip();
     const finish = (ok: boolean): void => {
@@ -1448,6 +1469,7 @@ function openDocsPanel(context: vscode.ExtensionContext): void {  const locateAr
       void refreshChip();
     };
     const stream = (c: string): void => {
+      lastDocsOutput += c;
       channel?.append(c);
       emitCockpitEvent({ type: 'log:append', line: c.replace(/\s+$/u, '') });
     };
@@ -1578,6 +1600,9 @@ function openDocsPanel(context: vscode.ExtensionContext): void {  const locateAr
     }
   };
 
+  // P2: bind the SAME runner the panel uses to a headless entry (het.docsRun),
+  // so real-host CI can drive the docs build without a webview round-trip.
+  docsRunImpl = runDocs;
   showDocsPanel(context, { getState, runDocs, fixGraphviz, openArtifact });
 }
 
