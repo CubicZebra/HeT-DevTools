@@ -47,8 +47,10 @@ export interface DiscoveryOptions {
   skipPath?: boolean;
   /** Preferred env names, heuristic. */
   preferEnvNames?: string[];
-  /** Extra conda/mamba-like roots. */
+  /** Extra conda/mamba-like roots (appended to the defaults). */
   extraRoots?: string[];
+  /** REPLACE the conda/mamba root candidates entirely (hermetic tests). */
+  rootCandidates?: string[];
 }
 
 interface ToolDef {
@@ -212,7 +214,11 @@ export async function discoverTools(opts: DiscoveryOptions = {}): Promise<ToolRo
 
   // (b) env roots (conda/mamba) + envs under them
   const rootHits: { envDir: string; kind: 'conda' | 'mamba'; name: string }[] = [];
-  for (const { root, kind } of envRootCandidates(opts.extraRoots)) {
+  const envRoots =
+    opts.rootCandidates !== undefined
+      ? opts.rootCandidates.map((root) => ({ root, kind: 'conda' as const }))
+      : envRootCandidates(opts.extraRoots);
+  for (const { root, kind } of envRoots) {
     rootHits.push({ envDir: root, kind, name: 'base' });
     let envNames: string[] = [];
     try {

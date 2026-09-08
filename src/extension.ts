@@ -2762,6 +2762,13 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
   };
 
   const tryRemote = async (ref: string | undefined, refLabel: string): Promise<boolean> => {
+    // E2 (marketplace-readiness): deterministic offline simulation — the C7
+    // host sets this so the online pin "fails" instantly and the local
+    // candidate chain is exercised (same code path as a real network outage).
+    if (process.env.HET_FORCE_TEMPLATE_OFFLINE === '1') {
+      log('[init] HET_FORCE_TEMPLATE_OFFLINE=1 → 跳过在线克隆，演练本地回退');
+      return false;
+    }
     const osMod = await import('node:os');
     const tmp = join(osMod.tmpdir(), `het-tpl-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
     const args = ref ? ['clone', '--depth', '1', '--branch', ref, repo, tmp] : ['clone', '--depth', '1', repo, tmp];

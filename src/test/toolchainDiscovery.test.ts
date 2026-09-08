@@ -34,9 +34,9 @@ describe('toolchainDiscovery (generic environment sniffing)', () => {
     assert.strictEqual(m['lcov'], undefined);
   });
 
-  it('prefers the semantic env name (build) over other envs', async () => {
+  it('prefers the semantic env name (build) over other envs (hermetic: fake roots only)', async () => {
     const root = fakeConda();
-    const rows = await discoverTools({ extraRoots: [root], wsl: false, skipPath: true, preferEnvNames: ['build', 'base'] });
+    const rows = await discoverTools({ rootCandidates: [root], wsl: false, skipPath: true, preferEnvNames: ['build', 'base'] });
     const dox = rows.find((r) => r.key === 'doxygen');
     assert.ok(dox && dox.source === 'conda' && dox.sourceDetail.includes('env build'), JSON.stringify(dox));
     const gl = rows.find((r) => r.key === 'gitleaks');
@@ -53,29 +53,30 @@ describe('toolchainDiscovery (generic environment sniffing)', () => {
     assert.strictEqual(dox.exe, 'C:/manual/doxygen.exe');
   });
 
-  it('reports a missing tool honestly instead of guessing', async () => {
-    const rows = await discoverTools({ wsl: false, extraBinDirs: [], skipPath: true });
-    // gcovr is niche enough that this should hold; if present the row is fine too
+  it('reports a missing tool honestly instead of guessing (hermetic: no env roots)', async () => {
+    const empty = join(tmpdir(), 'het-roots-empty');
+    const rows = await discoverTools({ rootCandidates: [empty], wsl: false, extraBinDirs: [], skipPath: true });
     const row = rows.find((r) => r.key === 'gcovr');
     assert.ok(row);
-    assert.ok(row.source === 'missing' || row.source === 'conda' || row.source === 'mamba' || row.source === 'uv' || row.source === 'venv', JSON.stringify(row));
+    assert.strictEqual(row.source, 'missing', 'with no real envs/PATH a niche tool is deterministically missing');
   });
 
   it('finds python at the env ROOT (conda keeps python.exe at the root, not Scripts)', async () => {
     const root = fakeConda();
-    const rows = await discoverTools({ extraRoots: [root], wsl: false, skipPath: true, preferEnvNames: ['build'] });
+    const rows = await discoverTools({ rootCandidates: [root], wsl: false, skipPath: true, preferEnvNames: ['build'] });
     const py = rows.find((r) => r.key === 'python');
     assert.ok(py && py.source === 'conda' && py.sourceDetail.includes('env build'), JSON.stringify(py));
   });
 
-  it('tags gtest as conan-managed and lcov as optional-Linux when missing', async () => {
-    const rows = await discoverTools({ wsl: false, skipPath: true, extraBinDirs: [] });
+  it('tags gtest as conan-managed and lcov as optional-Linux when missing (hermetic)', async () => {
+    const empty = join(tmpdir(), 'het-roots-empty2');
+    const rows = await discoverTools({ rootCandidates: [empty], wsl: false, skipPath: true, extraBinDirs: [] });
     const gtest = rows.find((r) => r.key === 'gtest');
     const lcov = rows.find((r) => r.key === 'lcov');
-    if (gtest && gtest.source === 'missing') {
-      assert.strictEqual(gtest.managed, true, 'gtest must be flagged conan-managed');
-    }
-    assert.strictEqual(lcov?.optional, true);
+    assert.ok(gtest && gtest.source === 'missing', 'gtest must be missing with no toolchain around');
+    assert.strictEqual(gtest.managed, true, 'gtest must be flagged conan-managed');
+    assert.ok(lcov && lcov.source === 'missing');
+    assert.strictEqual(lcov.optional, true);
   });
 
   it('env root candidates include mamba roots and ProgramData', () => {

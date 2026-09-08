@@ -21,6 +21,7 @@ const c3 = args.includes('--c3');
 const c4 = args.includes('--c4');
 const c5 = args.includes('--c5');
 const c6 = args.includes('--c6');
+const c7 = args.includes('--c7');
 
 /** @type {import('esbuild').BuildOptions} */
 const common = {
@@ -135,6 +136,16 @@ function buildOptions() {
       ...common,
       entryPoints: [join(srcDir, 'test', 'integration', 'c6.ts')],
       outfile: join(outDir, 'test-integration', 'c6.js'),
+    });
+  }
+
+  // 10) C7 template-acquisition path check (E2: forced-offline online pin →
+  //     deterministic local fallback + marker + fallback note)
+  if (c7) {
+    options.push({
+      ...common,
+      entryPoints: [join(srcDir, 'test', 'integration', 'c7.ts')],
+      outfile: join(outDir, 'test-integration', 'c7.js'),
     });
   }
   return options;

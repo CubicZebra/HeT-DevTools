@@ -248,6 +248,7 @@
     "package": "npm run asset && vsce package --no-dependencies",
     "test:c5": "npm run compile && node esbuild.mjs --c5 && node scripts/run-c5.mjs",
     "test:c6": "npm run compile && node esbuild.mjs --c6 && node scripts/run-c6.mjs",
+    "test:c7": "npm run compile && node esbuild.mjs --c7 && node scripts/run-c7.mjs",
     "asset": "node scripts/build-template-asset.mjs"
   },
   "devDependencies": {
