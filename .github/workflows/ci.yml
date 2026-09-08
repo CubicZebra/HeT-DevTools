@@ -98,6 +98,8 @@ jobs:
           command -v doxygen >/dev/null 2>&1 || brew install doxygen
           command -v dot >/dev/null 2>&1 || brew install graphviz
           /tmp/het-conan/bin/pip install --quiet 'sphinx>=8,<9' 'sphinx-intl' 'sphinx-rtd-theme>=2,<4' 'numpy>=1.26'
+          /tmp/het-conan/bin/python -c 'import numpy, sphinx; print("venv docs ok:", numpy.__version__)'
+          echo "PATH python -> $(command -v python || echo none) | python3 -> $(command -v python3 || echo none)"
 
       # @vscode/test-electron's own macOS download+unzip is unreliable on the
       # runners (spawn .../MacOS/Electron ENOENT); install VS Code via the brew

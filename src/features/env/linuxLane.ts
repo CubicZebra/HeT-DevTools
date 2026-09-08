@@ -82,17 +82,19 @@ export async function linuxRootAvailable(): Promise<boolean> {
   }
 }
 
-/** Quiet root apt operation (direct when uid-0, else passwordless sudo). */
+/** Quiet root apt operation (direct when uid-0, else `sudo -n apt-get …`). */
 async function rootAptLinux(...pkgs: string[]): Promise<void> {
-  const prefix = uidRoot ? [] : ['sudo', '-n'];
   const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' };
-  await run('apt-get', [...prefix, 'update', '-qq'], { timeoutMs: 3 * 60_000, env }).catch(() => {
+  // sudo is the COMMAND when not uid-0 — never pass `-n` to apt-get itself
+  // (that produced "Command line option 'n' is not understood").
+  const runApt = (args: string[]): ReturnType<typeof run> =>
+    uidRoot
+      ? run('apt-get', args, { timeoutMs: 10 * 60_000, env })
+      : run('sudo', ['-n', 'apt-get', ...args], { timeoutMs: 10 * 60_000, env });
+  await runApt(['update', '-qq']).catch(() => {
     /* update may fail offline — install will tell us */
   });
-  const r = await run('apt-get', [...prefix, 'install', '-y', '-qq', ...pkgs], {
-    timeoutMs: 10 * 60_000,
-    env,
-  });
+  const r = await runApt(['install', '-y', '-qq', ...pkgs]);
   if (r.code !== 0) {
     const tail = `${r.stdout}\n${r.stderr}`.split(/\r?\n/u).filter((s) => s.trim().length > 0).slice(-6).join('\n');
     throw new Error(`root apt 安装失败（${pkgs.join(' ')}）：\n${tail}`);
@@ -101,12 +103,12 @@ async function rootAptLinux(...pkgs: string[]): Promise<void> {
 
 /** Root-level gcov symlink so the coverage step resolves `gcov` to gcc-13's. */
 async function linkGcov13(): Promise<void> {
-  const prefix = uidRoot ? [] : ['sudo', '-n'];
   const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' };
-  await run('bash', ['-c', `${prefix.length ? 'sudo -n ' : ''}if [ -x /usr/bin/gcov-13 ] && [ ! -x /usr/bin/gcov ]; then ln -sf /usr/bin/gcov-13 /usr/bin/gcov; fi`], {
-    timeoutMs: 30_000,
-    env,
-  }).catch(() => {
+  const script = 'if [ -x /usr/bin/gcov-13 ] && [ ! -x /usr/bin/gcov ]; then ln -sf /usr/bin/gcov-13 /usr/bin/gcov; fi';
+  await (uidRoot
+    ? run('bash', ['-c', script], { timeoutMs: 30_000, env })
+    : run('sudo', ['-n', 'bash', '-c', script], { timeoutMs: 30_000, env })
+  ).catch(() => {
     /* non-fatal */
   });
 }

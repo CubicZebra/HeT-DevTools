@@ -1537,12 +1537,33 @@ function openDocsPanel(context: vscode.ExtensionContext): void {  const locateAr
         return { ok: true, message: `文档生成完成，找到 ${artifacts.length} 个产物页面（Linux 车道）。` };
       }
     }
-    const python = await which('python');
+    // macOS / multi-python hosts: docs/build.py imports numpy on its first
+    // lines, so the native path must pick a python/python3 that can REALLY
+    // `import numpy` (CI installs sphinx+numpy into the conan venv; if a
+    // system python shadows it on PATH, which('python') returns the wrong one).
+    // None capable → fall back to the first candidate and let build.py surface
+    // the raw missing-dependency error (the tail logs the chosen interpreter).
+    const candidates = [...new Set([await which('python'), await which('python3')].filter((p): p is string => !!p))];
+    let python: string | null = null;
+    for (const cand of candidates) {
+      try {
+        const probe = await run(cand, ['-c', 'import numpy'], { timeoutMs: 8000 });
+        if (probe.code === 0) {
+          python = cand;
+          break;
+        }
+      } catch {
+        /* keep searching */
+      }
+    }
+    python = python ?? candidates[0] ?? null;
     if (!python) {
       finish(false);
       return { ok: false, message: '找不到 python（docs/build.py 需要）。请先安装 Python 3.10+。' };
     }
-    channel?.appendLine(`[docs] ${python} docs/build.py @ ${root}`);
+    const preamble = `[docs] ${python} docs/build.py @ ${root}`;
+    lastDocsOutput += `${preamble}\n`;
+    channel?.appendLine(preamble);
     emitCockpitEvent({ type: 'log:start', title: `docs/build.py（本机）` });
     const result = await run(python, ['docs/build.py'], {
       cwd: root,

@@ -32,6 +32,21 @@ if (platform() === 'darwin' && meta.activate_code_coverage !== false) {
 }
 console.log(`[real] project fixture ready: ${proj} (coverage=${meta.activate_code_coverage ? 'on' : 'off'})`);
 
+// Native macOS docs must run under the SAME python that owns conan + the docs
+// deps (the CI conan venv /tmp/het-conan, where sphinx/numpy are installed).
+// The runner PATH may list a system `python` before that venv, so which('python')
+// inside the extension host would pick an interpreter WITHOUT numpy and
+// docs/build.py crashes at `import numpy`. Prepend the venv so python/python3
+// resolve deterministically (no-op on a dev box without that venv).
+if (platform() !== 'win32') {
+  for (const venvBin of ['/tmp/het-conan/bin']) {
+    if (existsSync(join(venvBin, 'python')) && process.env.PATH && !process.env.PATH.split(':').includes(venvBin)) {
+      process.env.PATH = `${venvBin}:${process.env.PATH}`;
+      console.log('[real] prepended to PATH: ' + venvBin);
+    }
+  }
+}
+
 function isExec(p) {
   try {
     accessSync(p, fsConsts.X_OK);
