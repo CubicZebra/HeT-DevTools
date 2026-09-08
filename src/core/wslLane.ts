@@ -183,3 +183,21 @@ export function wslLaneDocsRunCommand(cwdWsl: string, home: string): string {
 export function wslOutToWin(output: string): string {
   return output.replace(/\/mnt\/([a-zA-Z])\//g, (_m, drive: string) => `${drive.toUpperCase()}:/`);
 }
+
+/**
+ * A3 (marketplace-readiness): platform-neutral aliases.
+ *
+ * Every builder above is plain POSIX shell taking a Linux `home` — nothing
+ * references wsl.exe. The WSL lane executes them inside a distro; the native
+ * Linux managed lane (`features/env/linuxLane`) executes the SAME commands
+ * with local bash + root/sudo-non-interactive apt self-heal. The aliases give
+ * the Linux lane a naming that does not imply WSL; behaviour is identical.
+ */
+export const managedLaneLayout = wslLaneLayout;
+export const LANE_CC = WSL_CC;
+export const LANE_CXX = WSL_CXX;
+export const managedLaneProfile = wslLaneProfile;
+export const managedLaneEnsureCommand = wslLaneEnsureCommand;
+export const managedLaneBuildCommand = wslLaneBuildCommand;
+export const managedLaneDocsEnsureCommand = wslLaneDocsEnsureCommand;
+export const managedLaneDocsRunCommand = wslLaneDocsRunCommand;

@@ -18,6 +18,7 @@
 
 export type ProviderId =
   | 'linux-native'
+  | 'linux-managed'
   | 'win-wsl2'
   | 'win-wsl2-pending'
   | 'win-wsl-required'
@@ -63,6 +64,10 @@ export interface HostCapabilities {
   diskFreeBytes?: number;
   /** VS Build Tools / MSVC present (Windows compatibility mode). */
   msvcAvailable: boolean;
+  /** apt-get present (Debian/Ubuntu family — the managed-lane provisioning path). */
+  linuxApt: boolean;
+  /** uid 0 or passwordless `sudo -n` — can run root apt self-heal non-interactively. */
+  linuxAptSudo: boolean;
 }
 
 export interface ProviderDecision {
@@ -80,7 +85,8 @@ export interface ProviderDecision {
 const MAN = TOOLCHAIN_MANIFEST;
 
 const PROVIDER_LABEL: Record<ProviderId, string> = {
-  'linux-native': 'Linux 原生（gcc 自供）',
+  'linux-native': 'Linux 原生（系统 gcc，未隔离）',
+  'linux-managed': 'Linux · 派生 managed（隔离 gcc-13 + lcov 全语义）',
   'win-wsl2': 'Windows · WSL2 托管 distro（gcc + lcov 全语义）',
   'win-wsl2-pending': 'Windows · WSL2 已装但无发行版（需创建托管 distro）',
   'win-wsl-required': 'Windows · 需要启用 WSL2（或设 toolchain=system 用本机 MSVC）',
@@ -113,7 +119,7 @@ export function parseFakeHost(json?: string): Partial<HostCapabilities> {
     if (typeof raw.arch === 'string') {
       out.arch = raw.arch;
     }
-    for (const k of ['wslAvailable', 'wslDefaultReady', 'virtualizationEnabled', 'isAdmin', 'msvcAvailable'] as const) {
+    for (const k of ['wslAvailable', 'wslDefaultReady', 'virtualizationEnabled', 'isAdmin', 'msvcAvailable', 'linuxApt', 'linuxAptSudo'] as const) {
       if (typeof raw[k] === 'boolean') {
         out[k] = raw[k];
       }
@@ -144,7 +150,17 @@ export interface ProvisionPrefs {
 }
 
 /**
- * Provider selection — deterministic, capability-first. Windows semantics:
+ * Provider selection — deterministic, capability-first.
+ *
+ * Linux semantics (A3, derived-first): when apt + passwordless-root are both
+ * available the host can self-provision the ISOLATED managed lane
+ * (`~/.het-fti/managed-env` private venv + CONAN_HOME + generated gcc-13
+ * profile + root apt self-heal), so `linux-managed` wins — deterministic,
+ * never touching the system env. `linux-native` stays for hosts without that
+ * provisioning path (no apt / no passwordless root) and for explicit
+ * `toolchain: system` overrides (handled by the caller).
+ *
+ * Windows semantics:
  *   WSL2 present + distro ready → win-wsl2 (full, Linux-identical);
  *   WSL2 present but NO distro  → win-wsl2-pending (guide to create one);
  *   no usable WSL2 → win-wsl-required (guide: enable WSL2 or set
@@ -154,12 +170,30 @@ export interface ProvisionPrefs {
  */
 export function resolveProviderDecision(caps: HostCapabilities, _prefs?: ProvisionPrefs): ProviderDecision {
   if (caps.platform === 'linux') {
+    if (caps.linuxApt && caps.linuxAptSudo) {
+      // Derived-first: the host can self-provision the isolated managed lane.
+      return {
+        provider: 'linux-managed',
+        reason: 'Linux：隔离 managed lane（派生优先，不 touch 系统环境）',
+        coverage: 'full',
+        manifest: MAN,
+        note: lowDisk(caps)
+          ? '磁盘空间偏低，准备环境可能需要 ≥2 GB。'
+          : '托管 lane 位于 ~/.het-fti/managed-env（私有 venv + CONAN_HOME + gcc-13/lcov 免密自愈）；设 metadata.toolchain=system 可显式回本机原生。',
+      };
+    }
+    // No self-provisioning path → native system gcc (explicit, honest note).
+    const why = caps.linuxApt
+      ? '检测到 apt 但无免密 root（uid0 或 `sudo -n`）；托管 lane 的 root 自愈需要其一。'
+      : '未检测到 apt（托管 lane 需 Debian/Ubuntu 系 apt 自愈）。';
     return {
       provider: 'linux-native',
-      reason: 'Linux：系统内核 + 自供 gcc 工具集（确定性版本）',
+      reason: 'Linux：系统内核 + 本机 gcc（未隔离）',
       coverage: 'full',
       manifest: MAN,
-      note: lowDisk(caps) ? '磁盘空间偏低，准备环境可能需要 ≥2 GB。' : '覆盖率由 gcov/lcov 全量支持。',
+      note: lowDisk(caps)
+        ? '磁盘空间偏低，准备环境可能需要 ≥2 GB。'
+        : `${why} 设 metadata.toolchain=system 用本机 gcc；或提供免密 root 后重开工作区以启用派生 managed。`,
     };
   }
   if (caps.platform === 'darwin') {

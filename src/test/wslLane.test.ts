@@ -1,7 +1,15 @@
 import * as assert from 'node:assert';
 import {
+  LANE_CC,
+  LANE_CXX,
   WSL_CC,
   WSL_CXX,
+  managedLaneBuildCommand,
+  managedLaneDocsEnsureCommand,
+  managedLaneDocsRunCommand,
+  managedLaneEnsureCommand,
+  managedLaneLayout,
+  managedLaneProfile,
   wslLaneBuildCommand,
   wslLaneDocsEnsureCommand,
   wslLaneDocsRunCommand,
@@ -12,6 +20,17 @@ import {
 } from '../core/wslLane';
 
 describe('V5-1 wslLane (WSL2 managed build lane pure helpers)', () => {
+  it('A3: platform-neutral aliases are the very same pure builders (Linux lane reuse)', () => {
+    assert.strictEqual(managedLaneLayout, wslLaneLayout);
+    assert.strictEqual(managedLaneProfile, wslLaneProfile);
+    assert.strictEqual(managedLaneEnsureCommand, wslLaneEnsureCommand);
+    assert.strictEqual(managedLaneBuildCommand, wslLaneBuildCommand);
+    assert.strictEqual(managedLaneDocsEnsureCommand, wslLaneDocsEnsureCommand);
+    assert.strictEqual(managedLaneDocsRunCommand, wslLaneDocsRunCommand);
+    assert.strictEqual(LANE_CC, WSL_CC);
+    assert.strictEqual(LANE_CXX, WSL_CXX);
+  });
+
   it('keeps everything under ~/.het-fti/managed-env; conan home is .conan2 (CI parity)', () => {
     const l = wslLaneLayout('/home/chen');
     assert.strictEqual(l.root, '/home/chen/.het-fti/managed-env');

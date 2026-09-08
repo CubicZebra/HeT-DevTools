@@ -140,12 +140,13 @@ export async function run(): Promise<void> {
     assert.strictEqual(buildOk, true, 'real conan build must succeed from a scrubbed PATH (conda sniffed)');
     log('[verify-installed] scrub-phase OK — sniffed conda env + real conan build green');
   } else if (phase === 'matrix') {
-    // V4-7: four VIRTUAL hosts simulated inside one host via HET_FAKE_HOST —
+    // V4-7/A3: virtual hosts simulated inside one host via HET_FAKE_HOST —
     // the extension must pick the right Provider with zero manual interaction.
     const cases: { name: string; caps: Record<string, unknown>; provider: string; coverage: string }[] = [
       { name: 'win-noWSL', caps: { platform: 'win32', arch: 'x64', wslAvailable: false, wslDefaultReady: false, virtualizationEnabled: false, isAdmin: false, msvcAvailable: false }, provider: 'win-wsl-required', coverage: 'none' },
       { name: 'win-WSL2', caps: { platform: 'win32', arch: 'x64', wslAvailable: true, wslDefaultReady: true, virtualizationEnabled: true, isAdmin: true, msvcAvailable: true }, provider: 'win-wsl2', coverage: 'full' },
-      { name: 'linux-native', caps: { platform: 'linux', arch: 'x64', isAdmin: true }, provider: 'linux-native', coverage: 'full' },
+      { name: 'linux-managed', caps: { platform: 'linux', arch: 'x64', isAdmin: true, linuxApt: true, linuxAptSudo: true }, provider: 'linux-managed', coverage: 'full' },
+      { name: 'linux-native', caps: { platform: 'linux', arch: 'x64', isAdmin: true, linuxApt: true, linuxAptSudo: false }, provider: 'linux-native', coverage: 'full' },
       { name: 'macos-native', caps: { platform: 'darwin', arch: 'arm64' }, provider: 'macos-native', coverage: 'full' },
     ];
     for (const c of cases) {
@@ -159,7 +160,7 @@ export async function run(): Promise<void> {
     delete process.env.HET_FAKE_HOST;
     const st = (await vscode.commands.executeCommand('het.envStatus')) as { state: string; tools: Record<string, string> } | null;
     assert.ok(st && typeof st.state === 'string' && st.tools, 'het.envStatus must be queryable in the installed host');
-    log('[verify-installed] matrix OK — 4 virtual hosts + envStatus queryable');
+    log('[verify-installed] matrix OK — 5 virtual hosts + envStatus queryable');
   } else {
     assert.fail('unknown phase ' + phase);
   }

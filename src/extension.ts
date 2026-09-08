@@ -62,6 +62,7 @@ import { findCoverageReport, readCoveragePct } from './features/coverage/report'
 import { onStateChange, notifyStateChange } from './features/live';
 import { parseProjectToolchain } from './core/projectToolchain';
 import { getMacosLaneStatus } from './features/env/macosProbe';
+import { getLinuxLaneStatus } from './features/env/linuxLane';
 import { openHudPanel } from './features/hud/panel';
 import { HudEnvRow, HudModel, defaultHudActions, hudEnabled } from './features/hud/hudModel';
 import { TEMPLATE_REPO } from './core/templateDefaults';
@@ -413,6 +414,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         process.platform === 'darwin' && plan?.provider === 'macos-native'
           ? ((await getMacosLaneStatus(false).catch(() => null)) as { clt: boolean; clangVersion?: string; python?: string; note?: string } | null)
           : null,
+      linux:
+        process.platform === 'linux' && plan?.provider === 'linux-managed'
+          ? ((await getLinuxLaneStatus(false).catch(() => null)) as { home: string; ready: boolean; tools: Record<string, string>; note?: string } | null)
+          : null,
     };
   });
   setCockpitPageProvider('buildTest', async () => ({
@@ -723,6 +728,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('het.getProvisionPlan', async (force?: boolean) => getCurrentProvisionPlan(!!force, provisionPrefs())),
     vscode.commands.registerCommand('het.getWslLane', async (force?: boolean) => getWslLaneStatus(!!force)),
     vscode.commands.registerCommand('het.getMacosLane', async (force?: boolean) => getMacosLaneStatus(!!force)),
+    vscode.commands.registerCommand('het.getLinuxLane', async (force?: boolean) => getLinuxLaneStatus(!!force)),
     vscode.commands.registerCommand('het.envStatus', () => {
       const ctx = contextRef;
       return ctx ? currentManagedStatus(ctx.globalStorageUri.fsPath, process.platform === 'win32') : { state: 'absent' as const, tools: {} };
@@ -3160,12 +3166,21 @@ async function assembleHudModel(): Promise<HudModel> {
   // V5-6 (issue-1): under the WSL2 lane the rows must reflect the toolchain the
   // extension ACTUALLY uses (lane venv conan/cmake/ninja/python), never the
   // Windows-side sniff — a Windows box without local conan would otherwise show
-  // a red ✗ while builds succeed through the lane.
+  // a red ✗ while builds succeed through the lane. A3: the same holds on Linux
+  // under the linux-managed provider (native Linux managed lane).
   let lane: { conan?: string; cmake?: string; provisioned: boolean } | null = null;
+  let laneKind: 'wsl' | 'linux' | null = null;
   if (process.platform === 'win32' && plan?.provider === 'win-wsl2') {
     const wsl = await getWslLaneStatus(false).catch(() => null);
     if (wsl?.tools.gcc) {
       lane = { conan: wsl.tools.conan, cmake: wsl.tools.cmake, provisioned: !!wsl.tools.conan };
+      laneKind = 'wsl';
+    }
+  } else if (process.platform === 'linux' && plan?.provider === 'linux-managed') {
+    const laneStatus = await getLinuxLaneStatus(false).catch(() => null);
+    if (laneStatus?.tools.gcc) {
+      lane = { conan: laneStatus.tools.conan, cmake: laneStatus.tools.cmake, provisioned: !!laneStatus.tools.conan };
+      laneKind = 'linux';
     }
   }
   const env: HudEnvRow[] = [];
@@ -3190,16 +3205,20 @@ async function assembleHudModel(): Promise<HudModel> {
     let path = missing ? (t.managed ? 'Conan 缓存中的包（构建时自动获取）' : '本机未找到') : (t.exe || t.sourceDetail || '').slice(0, 96);
     if (laneOk) {
       tone = 'ok';
-      const bin = 'WSL2 车道 · ~/.het-fti/managed-env/venv/bin';
+      const bin =
+        laneKind === 'linux'
+          ? 'Linux 派生 managed lane · ~/.het-fti/managed-env/venv/bin'
+          : 'WSL2 车道 · ~/.het-fti/managed-env/venv/bin';
+      const kindTag = laneKind === 'linux' ? 'Linux lane venv' : 'WSL2 车道 venv';
       value =
         t.key === 'conan' && lane?.conan
-          ? `WSL2 车道 venv · ${lane.conan}`
+          ? `${kindTag} · ${lane.conan}`
           : t.key === 'cmake' && lane?.cmake
-            ? `WSL2 车道 venv · ${lane.cmake}`
+            ? `${kindTag} · ${lane.cmake}`
             : t.key === 'python'
-              ? 'WSL2 车道 venv（托管）'
+              ? `${kindTag}（托管）`
               : t.key === 'ninja'
-                ? 'WSL2 车道 venv（托管）'
+                ? `${kindTag}（托管）`
                 : value;
       if (['conan', 'cmake', 'python', 'ninja'].includes(t.key)) {
         path = `${bin}/${t.key}`;

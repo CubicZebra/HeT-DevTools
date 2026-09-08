@@ -57,6 +57,8 @@ export interface OverviewPayload {
   wsl?: WslView | null;
   /** V4-4 macOS lane status (darwin + macos-native plan). */
   osx?: OsxView | null;
+  /** A3 native-Linux managed lane status (linux + linux-managed plan). */
+  linux?: LinuxView | null;
 }
 
 export interface BuildTestPayload {
@@ -172,6 +174,13 @@ export interface OsxView {
   note?: string;
 }
 
+export interface LinuxView {
+  home: string;
+  ready: boolean;
+  tools: Record<string, string>;
+  note?: string;
+}
+
 const MANAGED_STATE_ZH: Record<ManagedView['state'], string> = {
   absent: '未准备（点「准备」即可离线自给 conan/cmake/ninja）',
   provisioning: '准备中…',
@@ -254,6 +263,28 @@ export function envOsxHtml(osx?: OsxView | null): string {
   return `<div class="env">${parts.join('')}</div>`;
 }
 
+/** A3: native-Linux managed lane status block (linux + linux-managed plan). */
+export function envLinuxHtml(linux?: LinuxView | null): string {
+  if (!linux) {
+    return '';
+  }
+  const mark = linux.ready ? '✓' : '!';
+  const tools = Object.entries(linux.tools)
+    .map(([k, v]) => `${k} ${v}`)
+    .join(' · ');
+  const parts: string[] = [
+    `<div class="drow"><span class="dk">${mark} Linux 派生 managed lane · ${esc(linux.home)}/.het-fti/managed-env</span>` +
+      `<span class="dv dim">${linux.ready ? '就绪（隔离 venv · gcc 系统级 · 覆盖率全语义）' : '托管 lane 未就绪'}</span></div>`,
+  ];
+  if (tools) {
+    parts.push(`<div class="drow dim"><span class="dk">工具</span><span class="dv dim">${esc(tools)}</span></div>`);
+  }
+  if (linux.note) {
+    parts.push(`<div class="drow dim"><span class="dk">说明</span><span class="dv dim">${esc(linux.note)}</span></div>`);
+  }
+  return `<div class="env">${parts.join('')}</div>`;
+}
+
 function overviewContent(p: OverviewPayload): string {
   const health = p.healthScore === undefined ? '' : `<span class="chip ${p.healthScore >= 80 ? 'ok' : p.healthScore >= 50 ? 'warn' : 'fail'}">健康分 ${p.healthScore}</span>`;
   return `<div class="row">${health}</div>
@@ -264,6 +295,7 @@ function overviewContent(p: OverviewPayload): string {
     ${envTopHtml(p.plan ?? null, p.managed ?? null)}
     ${envWslHtml(p.wsl ?? null)}
     ${envOsxHtml(p.osx ?? null)}
+    ${envLinuxHtml(p.linux ?? null)}
     ${envBlockHtml(p.envRows ?? [])}
     <div class="actions">
       <button class="primary" data-cmd="het.test"><i class="codicon codicon-play"></i>构建并测试</button>

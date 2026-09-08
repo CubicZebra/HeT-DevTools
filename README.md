@@ -103,8 +103,8 @@ fcpp 模板用 Conan / CMake / CI / Doxygen / semantic-release 把工程保障�
 ## 环境初始化器（V4 预览）
 
 - **托管环境**：`het.env.prepare` 在 VS Code 全局存储（`globalStorage`，卸载即清）内自举 Python venv → conan/cmake/ninja，生成 conan profile（`Toolchain 即数据`：版本由 manifest 决定，profile 只生成不探测）。
-- **平台决策**：`het.env.status` 按宿主能力返回 Provider（`linux-native` / `win-wsl2` / `win-wsl2-pending` / `win-wsl-required` / `macos-native` …）；WSL 存在即走 Linux 语义；无可用 WSL2 时明确引导启用（`wsl --install -d Ubuntu-24.04`）或设 `toolchain: system` 走本机 MSVC 兼容（无覆盖率），**不再静默降级**。
-- **构建走环境车道（V5-1）**：`managed` 语义项目在 Windows 上自动经 **WSL2 托管车道**构建（`wsl.exe` 内 Linux gcc-13 + gcov/lcov，与 Linux 同语义）；车道在发行版内自举私有 venv（conan/cmake/ninja）+ 私有 `CONAN_HOME` + 生成式 profile，**不触碰**发行版的 conda base / FEniCS 等其他环境；缺 `python3-venv` 自动免密 root `apt` 自愈；诊断路径自动映射回 Windows“问题”面板。`metadata.toolchain: system` 则走本机工具链（显式兼容模式，默认不推荐）。
+- **平台决策**：`het.env.status` 按宿主能力返回 Provider（`linux-managed` / `linux-native` / `win-wsl2` / `win-wsl2-pending` / `win-wsl-required` / `macos-native` …）；WSL 存在即走 Linux 语义；无可用 WSL2 时明确引导启用（`wsl --install -d Ubuntu-24.04`）或设 `toolchain: system` 走本机 MSVC 兼容（无覆盖率），**不再静默降级**。
+- **构建走环境车道（V5-1 / A3）**：`managed` 语义项目在 Windows 上自动经 **WSL2 托管车道**构建（`wsl.exe` 内 Linux gcc-13 + gcov/lcov，与 Linux 同语义）；车道在发行版内自举私有 venv（conan/cmake/ninja）+ 私有 `CONAN_HOME` + 生成式 profile，**不触碰**发行版的 conda base / FEniCS 等其他环境；缺 `python3-venv` 自动免密 root `apt` 自愈；诊断路径自动映射回 Windows“问题”面板。`metadata.toolchain: system` 则走本机工具链（显式兼容模式，默认不推荐）。**Linux 派生优先**：检测到 apt + 免密 root（uid0 或 `sudo -n`）时 Provider 为 `linux-managed`——在 `~/.het-fti/managed-env` 自举**同构隔离车道**（同样的私有 venv + CONAN_HOME + gcc-13/lcov root 自愈），不 touch 系统环境；无该自愈能力则 `linux-native`（本机 gcc，带诚实引导）。
 - **卸载即清**：`het.env.remove` 移除托管环境；激活时自动 GC 孤儿目录（无 marker 且无工具产物才清理）；扩展卸载后 `globalStorage` 由 VS Code 清除。
 - 常用命令：`het.getHostCapabilities` / `het.env.status` / `het.env.prepare` / `het.env.remove` / `het.env.gc` / `het.getWslLane` / `het.getMacosLane`；监控 `het.hud.fontSize`（10–20）。
 

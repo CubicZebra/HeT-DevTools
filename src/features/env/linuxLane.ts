@@ -1,0 +1,371 @@
+/**
+ * A3 (marketplace-readiness): native Linux managed lane — execution layer.
+ *
+ * Architecturally identical to the WSL2 lane (`features/env/wslLane`) but for
+ * a host that IS Linux: the SAME platform-neutral pure commands from
+ * `core/wslLane` (aliased `managedLane*`) run under LOCAL bash (no wsl.exe,
+ * no `/mnt` path mapping) against `~/.het-fti/managed-env` — a private venv
+ * (conan/cmake/ninja), a private CONAN_HOME and a GENERATED gcc-13 profile.
+ * The root-level self-heal (python3-venv / gcc-13 / lcov / doxygen / graphviz
+ * / make) runs through uid-0 apt or passwordless `sudo -n` — never through
+ * the user's conda envs, never touching the system environment otherwise.
+ *
+ * Safe to call on any platform: status probes return `null` off-Linux, and
+ * the ensure/build entry points throw with clear guidance if the host cannot
+ * self-provision (matching the "no silent degradation" policy).
+ *
+ * NOTE: this module only runs for real when the extension host IS Linux (the
+ * ubuntu CI / a Linux desktop). Locally (Windows dev box) it is validated by
+ * unit tests and by the P1-B-5 DoD harness, which executes the SAME pure lane
+ * commands inside WSL Ubuntu (Linux semantics by construction).
+ */
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { rmSync, writeFileSync } from 'node:fs';
+import { run } from '../../utils/exec';
+import type { BuildSummary } from '../../core/conanService';
+import {
+  managedLaneBuildCommand,
+  managedLaneDocsEnsureCommand,
+  managedLaneDocsRunCommand,
+  managedLaneEnsureCommand,
+  managedLaneLayout,
+  managedLaneProfile,
+} from '../../core/wslLane';
+
+const uidRoot = (() => {
+  try {
+    return (process.getuid?.() ?? -1) === 0;
+  } catch {
+    return false;
+  }
+})();
+
+/** Where the lane lives on a native Linux host ($HOME). */
+export function linuxLaneHome(): string {
+  return homedir();
+}
+
+/** Local bash file transport (mirror of the WSL lane's file transport). */
+let scriptSeq = 0;
+function writeLinuxScript(content: string): string {
+  scriptSeq += 1;
+  const p = join(tmpdir(), `het-linux-lane-${process.pid}-${scriptSeq}.sh`);
+  writeFileSync(p, content, 'utf8');
+  return p;
+}
+
+/** Run a lane script with the LOCAL bash (native Linux; rejects on failure to start). */
+export async function runLinuxScript(
+  content: string,
+  timeoutMs = 15_000,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const f = writeLinuxScript(content);
+  try {
+    const r = await run('bash', [f], { timeoutMs });
+    return { code: r.code ?? -1, stdout: r.stdout, stderr: r.stderr };
+  } finally {
+    rmSync(f, { force: true });
+  }
+}
+
+/** uid-0 or passwordless `sudo -n` — can we run root apt non-interactively? */
+export async function linuxRootAvailable(): Promise<boolean> {
+  if (uidRoot) {
+    return true;
+  }
+  try {
+    const r = await run('sudo', ['-n', 'true'], { timeoutMs: 4000 });
+    return r.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Quiet root apt operation (direct when uid-0, else passwordless sudo). */
+async function rootAptLinux(...pkgs: string[]): Promise<void> {
+  const prefix = uidRoot ? [] : ['sudo', '-n'];
+  const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' };
+  await run('apt-get', [...prefix, 'update', '-qq'], { timeoutMs: 3 * 60_000, env }).catch(() => {
+    /* update may fail offline — install will tell us */
+  });
+  const r = await run('apt-get', [...prefix, 'install', '-y', '-qq', ...pkgs], {
+    timeoutMs: 10 * 60_000,
+    env,
+  });
+  if (r.code !== 0) {
+    const tail = `${r.stdout}\n${r.stderr}`.split(/\r?\n/u).filter((s) => s.trim().length > 0).slice(-6).join('\n');
+    throw new Error(`root apt 安装失败（${pkgs.join(' ')}）：\n${tail}`);
+  }
+}
+
+/** Root-level gcov symlink so the coverage step resolves `gcov` to gcc-13's. */
+async function linkGcov13(): Promise<void> {
+  const prefix = uidRoot ? [] : ['sudo', '-n'];
+  const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' };
+  await run('bash', ['-c', `${prefix.length ? 'sudo -n ' : ''}if [ -x /usr/bin/gcov-13 ] && [ ! -x /usr/bin/gcov ]; then ln -sf /usr/bin/gcov-13 /usr/bin/gcov; fi`], {
+    timeoutMs: 30_000,
+    env,
+  }).catch(() => {
+    /* non-fatal */
+  });
+}
+
+let cache: { at: number; home: string; note?: string } | null = null;
+
+/**
+ * Idempotent bootstrap of the isolated lane (cached 60 s). Mirrors
+ * `ensureWslLane`: creates the private venv + generated profile + CONAN_HOME,
+ * then SELF-HEALS the root-level system packages when passwordless root is
+ * available (python3-venv / gcc-13 / lcov + gcov symlink). Throws with the
+ * output tail — and actionable guidance — when provisioning is impossible.
+ */
+export async function ensureLinuxLane(): Promise<{ home: string; note?: string }> {
+  if (cache && Date.now() - cache.at < 60_000) {
+    return { home: cache.home, note: cache.note };
+  }
+  const home = linuxLaneHome();
+  const cmd = managedLaneEnsureCommand(home, managedLaneProfile('Release'));
+  const runEnsure = (): Promise<{ code: number; stdout: string; stderr: string }> => runLinuxScript(cmd, 15 * 60_000);
+  const root = await linuxRootAvailable();
+  let r = await runEnsure();
+  // exit 3 = no python3 that can create venvs (Ubuntu ships the module but
+  // not ensurepip) → one-time root apt of python3-venv, then retry.
+  if (r.code === 3 && root) {
+    await rootAptLinux('python3-venv');
+    r = await runEnsure();
+  }
+  if (r.code === 3 && !root) {
+    throw new Error('托管 lane 需要 python3-venv（Ubuntu 默认缺 ensurepip）。请以 root 执行一次：sudo apt-get install -y python3-venv；或提供免密 sudo 后重试。');
+  }
+  // gcc-13 missing → root self-heal (never silently build with another gcc).
+  if (r.code === 0 && /lane_gcc:-\s*$/m.test(`${r.stdout}\n`) && root) {
+    await rootAptLinux('gcc-13');
+    r = await runEnsure();
+  }
+  if (r.code === 0 && /lane_gcc:-\s*$/m.test(`${r.stdout}\n`) && !root) {
+    throw new Error('托管 lane 需要 /usr/bin/gcc-13。请以 root 执行一次：sudo apt-get install -y gcc-13 g++-13；或提供免密 sudo 后重试。');
+  }
+  // lcov missing → root self-heal + gcov symlink (mirror of the GitHub Action).
+  if (r.code === 0 && /lane_lcov:-\s*$/m.test(`${r.stdout}\n`) && root) {
+    await rootAptLinux('lcov');
+    await linkGcov13();
+    r = await runEnsure();
+  }
+  if (r.code !== 0) {
+    const tail = `${r.stdout}\n${r.stderr}`.split(/\r?\n/u).filter((s) => s.trim().length > 0).slice(-8).join('\n');
+    throw new Error(`Linux 托管工具链准备失败（exit=${r.code}）：\n${tail}`);
+  }
+  cache = { at: Date.now(), home };
+  return { home };
+}
+
+/**
+ * Run `conan create .` inside the native Linux managed lane and return a
+ * conanService-compatible summary (output is already native — no path map).
+ */
+export async function runLinuxConanCreate(
+  cwd: string,
+  opts: {
+    buildType?: 'Debug' | 'Release';
+    /** V5-6: force-rebuild the project's own recipe (coverage-enabled runs). */
+    forceSelf?: string;
+    onStdout?: (chunk: string) => void;
+    onStderr?: (chunk: string) => void;
+    timeoutMs?: number;
+  } = {},
+): Promise<BuildSummary> {
+  const { home } = await ensureLinuxLane();
+  const cmd = managedLaneBuildCommand(cwd, home, opts.buildType ?? 'Debug', opts.forceSelf);
+  const f = writeLinuxScript(cmd);
+  let stdout = '';
+  let stderr = '';
+  try {
+    const r = await run('bash', [f], {
+      cwd,
+      timeoutMs: opts.timeoutMs ?? 0,
+      onStdout: (c) => {
+        stdout += c;
+        opts.onStdout?.(c);
+      },
+      onStderr: (c) => {
+        stderr += c;
+        opts.onStderr?.(c);
+      },
+    });
+    return { ok: r.code === 0, code: r.code, stdout, stderr };
+  } finally {
+    rmSync(f, { force: true });
+  }
+}
+
+/** Fast, NON-provisioning check that the lane venv already has conan. */
+export async function linuxLaneConanPresent(): Promise<boolean> {
+  try {
+    const home = linuxLaneHome();
+    const exe = join(managedLaneLayout(home).venv, 'bin', 'conan');
+    const r = await runLinuxScript(`test -x "${exe}" && echo 1`, 8000);
+    return r.code === 0 && /1/u.test(r.stdout);
+  } catch {
+    return false;
+  }
+}
+
+/** Lane docs-tool fact (native Linux): venv sphinx + system doxygen/dot/make. */
+export interface LinuxLaneDocsTools {
+  python?: string;
+  sphinx?: string;
+  doxygen?: string;
+  dot?: string;
+  make?: string;
+}
+
+export async function probeLinuxLaneDocsTools(): Promise<LinuxLaneDocsTools> {
+  const script = [
+    'P="$HOME/.het-fti/managed-env/venv/bin"',
+    'printf "python:"; [ -x "$P/python" ] && "$P/python" --version 2>/dev/null | head -1 || echo -; echo',
+    'printf "sphinx:"; [ -x "$P/sphinx-build" ] && "$P/sphinx-build" --version 2>/dev/null | head -1 || echo -; echo',
+    'printf "doxygen:"; [ -x /usr/bin/doxygen ] && doxygen --version 2>/dev/null || echo -; echo',
+    'printf "dot:"; [ -x /usr/bin/dot ] && dot -V 2>&1 | head -1 || echo -; echo',
+    'printf "make:"; [ -x /usr/bin/make ] && make --version 2>/dev/null | head -1 || echo -; echo',
+  ].join('\n');
+  const r = await runLinuxScript(script, 15_000).catch(() => null);
+  if (!r) {
+    return {};
+  }
+  const out: LinuxLaneDocsTools = {};
+  for (const raw of r.stdout.split(/\r?\n/u)) {
+    const m = /^(python|sphinx|doxygen|dot|make):(.*)$/u.exec(raw.trim());
+    if (!m) {
+      continue;
+    }
+    const v = m[2].trim();
+    if (v && v !== '-') {
+      (out as Record<string, string>)[m[1]] = v;
+    }
+  }
+  return out;
+}
+
+let docsCache: { at: number; home: string } | null = null;
+
+/** System tools the docs stack needs (root self-heal when any is missing). */
+async function ensureLinuxDocsSystem(): Promise<void> {
+  const check = await run('bash', ['-c', 'command -v doxygen >/dev/null 2>&1 && command -v dot >/dev/null 2>&1 && command -v make >/dev/null 2>&1'], { timeoutMs: 10_000 }).catch(() => null);
+  if (check?.code === 0) {
+    return;
+  }
+  await rootAptLinux('doxygen', 'graphviz', 'make').catch(() => {
+    // No root: report honestly (venv parts may still work).
+    throw new Error('文档车道需要系统 doxygen/graphviz/make；无免密 root 无法自愈。请 sudo apt-get install -y doxygen graphviz make，或提供免密 sudo。');
+  });
+}
+
+/** Ensure the lane DOCS stack (venv sphinx via pip + system doxygen/dot/make). */
+export async function ensureLinuxDocs(): Promise<void> {
+  if (docsCache && Date.now() - docsCache.at < 60_000) {
+    return;
+  }
+  const home = linuxLaneHome();
+  await ensureLinuxDocsSystem();
+  const cmd = managedLaneDocsEnsureCommand(home);
+  const r = await runLinuxScript(cmd, 20 * 60_000).catch(() => null);
+  if (!r || r.code !== 0) {
+    const tail = `${r?.stdout ?? ''}\n${r?.stderr ?? ''}`.split(/\r?\n/u).filter((s) => s.trim().length > 0).slice(-8).join('\n');
+    throw new Error(`Linux 文档工具链准备失败：\n${tail}`);
+  }
+  if (!/docs_sphinx:.+/.test(r.stdout) || !/docs_doxygen:.+/.test(r.stdout) || !/docs_dot:.+/.test(r.stdout) || !/docs_make:.+/.test(r.stdout)) {
+    throw new Error(`Linux 文档工具未齐备：\n${r.stdout.slice(-800)}`);
+  }
+  docsCache = { at: Date.now(), home };
+}
+
+/** Run `python docs/build.py` inside the native Linux managed lane. */
+export async function runLinuxDocs(
+  cwd: string,
+  opts: { onStdout?: (c: string) => void; onStderr?: (c: string) => void; timeoutMs?: number } = {},
+): Promise<BuildSummary> {
+  const { home } = await ensureLinuxLane();
+  await ensureLinuxDocs();
+  const cmd = managedLaneDocsRunCommand(cwd, home);
+  const f = writeLinuxScript(cmd);
+  let stdout = '';
+  let stderr = '';
+  try {
+    const r = await run('bash', [f], {
+      cwd,
+      timeoutMs: opts.timeoutMs ?? 0,
+      onStdout: (c) => {
+        stdout += c;
+        opts.onStdout?.(c);
+      },
+      onStderr: (c) => {
+        stderr += c;
+        opts.onStderr?.(c);
+      },
+    });
+    return { ok: r.code === 0, code: r.code, stdout, stderr };
+  } finally {
+    rmSync(f, { force: true });
+  }
+}
+
+/** Status snapshot for the dashboard (mirror of the WSL lane's status). */
+export interface LinuxLaneStatus {
+  available: boolean;
+  home: string;
+  ready: boolean;
+  tools: { gcc?: string; lcov?: string; conan?: string; cmake?: string };
+  note?: string;
+}
+
+let statusCache: { at: number; status: LinuxLaneStatus } | null = null;
+
+/**
+ * Overall lane status for the env page / HUD (no provisioning — read only).
+ * Off-Linux hosts return null (safe to call everywhere). `tools.conan` /
+ * `tools.cmake` come from the managed venv (the toolchain actually used);
+ * `tools.gcc` / `tools.lcov` come from the system (apt-provisioned).
+ */
+export async function getLinuxLaneStatus(force = false): Promise<LinuxLaneStatus | null> {
+  if (process.platform !== 'linux') {
+    return null;
+  }
+  if (!force && statusCache && Date.now() - statusCache.at < 60_000) {
+    return statusCache.status;
+  }
+  const home = linuxLaneHome();
+  const script = [
+    `P="${join(managedLaneLayout(home).venv, 'bin')}"`,
+    'printf "conan:"; [ -x "$P/conan" ] && "$P/conan" --version 2>/dev/null | head -1 || echo -; echo',
+    'printf "cmake:"; [ -x "$P/cmake" ] && "$P/cmake" --version 2>/dev/null | head -1 || echo -; echo',
+    'printf "gcc:"; gcc --version 2>/dev/null | head -1 || echo -; echo',
+    'printf "lcov:"; lcov --version 2>/dev/null | head -1 || echo -; echo',
+  ].join('\n');
+  const tools: LinuxLaneStatus['tools'] = {};
+  const r = await runLinuxScript(script, 15_000).catch(() => null);
+  if (r) {
+    for (const raw of r.stdout.split(/\r?\n/u)) {
+      const m = /^(conan|cmake|gcc|lcov):(.*)$/u.exec(raw.trim());
+      if (!m) {
+        continue;
+      }
+      const v = m[2].trim();
+      if (v && v !== '-') {
+        (tools as Record<string, string>)[m[1]] = v;
+      }
+    }
+  }
+  const ready = !!tools.gcc && !!tools.conan;
+  let note: string | undefined;
+  if (!tools.gcc) {
+    note = '/usr/bin/gcc 未就绪（首次托管构建将尝试 root 自愈 gcc-13）。';
+  } else if (!tools.conan || !tools.cmake) {
+    note = '托管车道 conan/cmake 未就绪（首次「构建并测试」将自动准备）。';
+  } else {
+    note = `托管 lane · ${home}/.het-fti/managed-env（隔离 venv + CONAN_HOME）`;
+  }
+  const status: LinuxLaneStatus = { available: true, home, ready, tools, note };
+  statusCache = { at: Date.now(), status };
+  return status;
+}

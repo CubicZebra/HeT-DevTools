@@ -10,6 +10,7 @@ import { getCurrentProvisionPlan } from './provisionHost';
 import { currentManagedStatus } from './managedProvisioner';
 import { getWslLaneStatus } from './wslProbe';
 import { getMacosLaneStatus } from './macosProbe';
+import { getLinuxLaneStatus, linuxLaneConanPresent } from './linuxLane';
 import { laneConanPresent } from './wslLane';
 import { providerLabel } from '../../core/provisionPlan';
 import type { ManagedState } from '../../core/managedEnv';
@@ -22,6 +23,8 @@ export interface EnvSample {
   managed: { state: ManagedState; tools: Record<string, string>; note?: string } | null;
   wsl: { distro?: string; ready: boolean; tools: Record<string, string>; note?: string } | null;
   osx: { clt: boolean; clangVersion?: string; python?: string; note?: string } | null;
+  /** A3: native-Linux managed lane (linux + linux-managed provider). */
+  linux: { home: string; ready: boolean; tools: Record<string, string>; note?: string } | null;
   /** conan readiness: true/false under managed semantics; null = system sniff. */
   conan: boolean | null;
   /** One short line for the hover "开发环境" row (no long runtime details). */
@@ -45,7 +48,9 @@ function gccShort(s: string | undefined): string | null {
 }
 
 /** Compact human line from a sample (pure — unit tested, kept SHORT). */
-export function envSummaryOf(s: Pick<EnvSample, 'providerId' | 'providerLabel' | 'wsl' | 'managed' | 'osx'>): string {
+export function envSummaryOf(
+  s: Pick<EnvSample, 'providerId' | 'providerLabel' | 'wsl' | 'linux' | 'managed' | 'osx'>,
+): string {
   const wslTools = s.wsl?.tools ?? {};
   if (s.wsl?.ready) {
     const bits = ['WSL2'];
@@ -61,6 +66,22 @@ export function envSummaryOf(s: Pick<EnvSample, 'providerId' | 'providerLabel' |
       bits.push(`conan ${conan}`);
     }
     return bits.join(' · ');
+  }
+  // A3: native-Linux managed lane (derived-first) — authoritative for builds.
+  if (s.linux) {
+    const t = s.linux.tools ?? {};
+    if (s.linux.ready) {
+      const bits = ['Linux 派生 managed'];
+      const conan = versionNum(t.conan);
+      if (conan) {
+        bits.push(`conan ${conan}`);
+      }
+      const cmake = versionNum(t.cmake);
+      if (cmake) {
+        bits.push(`cmake ${cmake}`);
+      }
+      return bits.join(' · ');
+    }
   }
   if (s.managed && s.managed.state === 'ready') {
     const t = s.managed.tools;
@@ -78,28 +99,39 @@ export function envSummaryOf(s: Pick<EnvSample, 'providerId' | 'providerLabel' |
 }
 
 /**
- * V5-2B: conan readiness fact for the health check. Under managed semantics on
- * Windows it reflects the real lane (venv conan exists / pending distro);
- * otherwise (native system / linux / macos) it returns null so health falls
- * back to system sniffing.
+ * V5-2B: conan readiness fact for the health check. Under managed semantics it
+ * reflects the REAL lane (venv conan exists): on Windows the WSL2 lane, on
+ * Linux the native managed lane. For explicit system/native providers it
+ * returns null so health falls back to system sniffing.
  */
 export async function envConanFact(): Promise<{ conan?: boolean } | undefined> {
-  if (process.platform !== 'win32') {
-    return undefined;
-  }
   const plan = await getCurrentProvisionPlan(false).catch(() => null);
   if (!plan) {
     return undefined; // native fallback: system conan decides
   }
-  if (plan.provider === 'win-wsl2-pending') {
-    return { conan: false };
-  }
-  if (plan.provider === 'win-wsl2') {
-    const wsl = await getWslLaneStatus(false).catch(() => null);
-    if (!wsl?.distro) {
+  if (process.platform === 'win32') {
+    if (plan.provider === 'win-wsl2-pending') {
       return { conan: false };
     }
-    return { conan: await laneConanPresent(wsl.distro).catch(() => false) };
+    if (plan.provider === 'win-wsl2') {
+      const wsl = await getWslLaneStatus(false).catch(() => null);
+      if (!wsl?.distro) {
+        return { conan: false };
+      }
+      return { conan: await laneConanPresent(wsl.distro).catch(() => false) };
+    }
+    return undefined;
+  }
+  if (process.platform === 'linux') {
+    // A3: linux-managed → lane venv decides; linux-native → system sniff.
+    if (plan.provider === 'linux-managed') {
+      const lane = await getLinuxLaneStatus(false).catch(() => null);
+      if (!lane?.available) {
+        return { conan: false };
+      }
+      return { conan: await linuxLaneConanPresent().catch(() => false) };
+    }
+    return undefined;
   }
   return undefined;
 }
@@ -111,6 +143,9 @@ export async function collectEnvSample(storageRoot: string): Promise<EnvSample> 
   const isWinWsl = process.platform === 'win32' && (plan?.provider === 'win-wsl2' || plan?.provider === 'win-wsl2-pending');
   const wsl = isWinWsl ? await getWslLaneStatus(false).catch(() => null) : null;
   const osx = process.platform === 'darwin' && plan?.provider === 'macos-native' ? await getMacosLaneStatus(false).catch(() => null) : null;
+  // A3: native Linux managed lane (derived-first provider).
+  const isLinuxManaged = process.platform === 'linux' && plan?.provider === 'linux-managed';
+  const linux = isLinuxManaged ? await getLinuxLaneStatus(false).catch(() => null) : null;
   const sample: EnvSample = {
     providerId: plan?.provider ?? null,
     providerLabel: plan ? providerLabel(plan.provider) : '',
@@ -122,6 +157,7 @@ export async function collectEnvSample(storageRoot: string): Promise<EnvSample> 
         : null,
     wsl: wsl && wsl.available ? { distro: wsl.distro, ready: wsl.ready, tools: (wsl.tools ?? {}) as Record<string, string>, note: wsl.note } : null,
     osx: osx ? { clt: osx.clt, clangVersion: osx.clangVersion, python: osx.python, note: osx.note } : null,
+    linux: linux ? { home: linux.home, ready: linux.ready, tools: (linux.tools ?? {}) as Record<string, string>, note: linux.note } : null,
     conan: null,
     summary: '',
   };

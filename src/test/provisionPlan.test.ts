@@ -18,6 +18,8 @@ function caps(over: Partial<HostCapabilities>): HostCapabilities {
     virtualizationEnabled: false,
     isAdmin: false,
     msvcAvailable: false,
+    linuxApt: false,
+    linuxAptSudo: false,
     ...over,
   };
 }
@@ -35,6 +37,30 @@ describe('V4-1 provisionPlan', () => {
     assert.strictEqual(d.provider, 'linux-native');
     assert.strictEqual(d.coverage, 'full');
     assert.ok(providerLabel('linux-native').includes('Linux'));
+  });
+
+  it('linux + apt + passwordless root → linux-managed (derived-first, isolated)', () => {
+    const d = resolveProviderDecision(caps({ platform: 'linux', linuxApt: true, linuxAptSudo: true }));
+    assert.strictEqual(d.provider, 'linux-managed');
+    assert.strictEqual(d.coverage, 'full');
+    assert.ok(d.reason.includes('派生'), 'reason names derived-first');
+    assert.ok(d.note.includes('managed-env'), 'note names the isolated lane path');
+    assert.ok(providerLabel('linux-managed').includes('派生'), 'label shows derived managed');
+    assert.ok(providerLabel('linux-managed').includes('隔离'), 'label shows isolation');
+  });
+
+  it('linux + apt but no passwordless root → linux-native with honest guidance', () => {
+    const d = resolveProviderDecision(caps({ platform: 'linux', linuxApt: true, linuxAptSudo: false }));
+    assert.strictEqual(d.provider, 'linux-native');
+    assert.strictEqual(d.coverage, 'full');
+    assert.ok(d.note.includes('免密 root'), 'note guides enabling passwordless root');
+    assert.ok(!d.note.includes('MinGW'), 'no degradation channel wording');
+  });
+
+  it('linux + no apt → linux-native (managed lane needs Debian/Ubuntu apt)', () => {
+    const d = resolveProviderDecision(caps({ platform: 'linux', linuxApt: false }));
+    assert.strictEqual(d.provider, 'linux-native');
+    assert.ok(d.note.includes('apt'), 'note explains the apt requirement');
   });
 
   it('darwin → macos-native with full coverage', () => {
@@ -94,7 +120,7 @@ describe('V4-1 provisionPlan', () => {
     assert.deepStrictEqual(parseFakeHost(undefined), {});
   });
 
-  it('fake host drives the full matrix (win-noWSL / win-WSL2 / linux / macos)', () => {
+  it('fake host drives the full matrix (win-noWSL / win-WSL2 / linux / linux-managed / macos)', () => {
     const mk = (json: string): ProviderDecision => resolveProviderDecision({
       ...caps({}),
       ...parseFakeHost(json),
@@ -102,6 +128,7 @@ describe('V4-1 provisionPlan', () => {
     assert.strictEqual(mk('{"platform":"win32"}').provider, 'win-wsl-required');
     assert.strictEqual(mk('{"platform":"win32","wslAvailable":true,"wslDefaultReady":true}').provider, 'win-wsl2');
     assert.strictEqual(mk('{"platform":"linux"}').provider, 'linux-native');
+    assert.strictEqual(mk('{"platform":"linux","linuxApt":true,"linuxAptSudo":true}').provider, 'linux-managed');
     assert.strictEqual(mk('{"platform":"darwin"}').provider, 'macos-native');
   });
 });

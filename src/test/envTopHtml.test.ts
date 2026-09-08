@@ -1,5 +1,5 @@
 import * as assert from 'node:assert';
-import { envOsxHtml, envTopHtml, envWslHtml } from '../features/cockpit/webview/render';
+import { envLinuxHtml, envOsxHtml, envTopHtml, envWslHtml } from '../features/cockpit/webview/render';
 
 describe('V4-5 envTopHtml (dashboard env & managed block)', () => {
   it('renders nothing when both plan and managed are absent', () => {
@@ -93,5 +93,41 @@ describe('V4-4 envOsxHtml (macOS lane block)', () => {
     assert.ok(html.includes('!'));
     assert.ok(html.includes('未检测到 Command Line Tools'));
     assert.ok(html.includes('xcode-select --install'));
+  });
+});
+
+describe('A3 envLinuxHtml (native-Linux managed lane block)', () => {
+  it('renders nothing when the lane is absent', () => {
+    assert.strictEqual(envLinuxHtml(null), '');
+    assert.strictEqual(envLinuxHtml(undefined), '');
+  });
+
+  it('ready lane: check mark + derived path + tools + note', () => {
+    const html = envLinuxHtml({
+      home: '/home/chen',
+      ready: true,
+      tools: { gcc: 'gcc-13 (Ubuntu 13.3.0) 13.3.0', lcov: 'lcov: LCOV version 2.0', conan: 'Conan version 2.32.0' },
+      note: '托管 lane · /home/chen/.het-fti/managed-env（隔离 venv + CONAN_HOME）',
+    });
+    assert.ok(html.includes('✓'));
+    assert.ok(html.includes('Linux 派生 managed lane'), 'block names derived managed lane');
+    assert.ok(html.includes('.het-fti/managed-env'), 'block shows the isolated path');
+    assert.ok(html.includes('gcc-13'), 'system gcc-13 shown as a tool');
+    assert.ok(html.includes('隔离 venv'));
+  });
+
+  it('unready lane shows warning mark + honest copy', () => {
+    const html = envLinuxHtml({ home: '/home/chen', ready: false, tools: {}, note: '托管车道 conan/cmake 未就绪（首次「构建并测试」将自动准备）。' });
+    assert.ok(html.includes('!'));
+    assert.ok(html.includes('未就绪'));
+    assert.ok(html.includes('Linux 派生 managed lane'));
+    assert.ok(html.includes('自动准备'));
+  });
+
+  it('escapes the home path and note', () => {
+    const html = envLinuxHtml({ home: '/home/<x>', ready: false, tools: {}, note: '">&' });
+    assert.ok(!html.includes('/home/<x>'));
+    assert.ok(html.includes('&lt;x&gt;'));
+    assert.ok(html.includes('&quot;&gt;&amp;'));
   });
 });

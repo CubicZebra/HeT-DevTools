@@ -7,6 +7,7 @@ describe('V5-2B envSample (single environment sample)', () => {
       providerId: 'win-wsl2',
       providerLabel: 'Windows · WSL2 托管 distro（gcc + lcov 全语义）',
       wsl: { distro: 'Ubuntu-24.04', ready: true, tools: { gcc: 'gcc-13 (Ubuntu 13.3.0) 13.3.0', conan: 'Conan version 2.32.0' } },
+      linux: null,
       managed: null,
       osx: null,
     });
@@ -18,17 +19,48 @@ describe('V5-2B envSample (single environment sample)', () => {
       providerId: 'win-wsl-required',
       providerLabel: 'Windows · 需要启用 WSL2（或设 toolchain=system 用本机 MSVC）',
       managed: { state: 'ready', tools: { conan: '2.32.0', cmake: '4.4.3' } },
+      linux: null,
       wsl: null,
       osx: null,
     });
     assert.strictEqual(s, '托管环境 · conan 2.32.0 · cmake 4.4.3');
   });
 
+  it('summarises a ready native-Linux managed lane as derived', () => {
+    const s = envSummaryOf({
+      providerId: 'linux-managed',
+      providerLabel: 'Linux · 派生 managed（隔离 gcc-13 + lcov 全语义）',
+      linux: {
+        home: '/home/chen',
+        ready: true,
+        tools: { gcc: 'gcc-13 (Ubuntu 13.3.0) 13.3.0', conan: 'Conan version 2.32.0', cmake: 'cmake version 4.4.3' },
+      },
+      wsl: null,
+      managed: null,
+      osx: null,
+    });
+    assert.strictEqual(s, 'Linux 派生 managed · conan 2.32.0 · cmake 4.4.3');
+  });
+
+  it('linux lane not ready falls back to its provider label', () => {
+    assert.strictEqual(
+      envSummaryOf({
+        providerId: 'linux-managed',
+        providerLabel: 'Linux · 派生 managed（隔离 gcc-13 + lcov 全语义）',
+        linux: { home: '/home/chen', ready: false, tools: {} },
+        wsl: null,
+        managed: null,
+        osx: null,
+      }),
+      'Linux · 派生 managed（隔离 gcc-13 + lcov 全语义）',
+    );
+  });
+
   it('falls back to the provider label and finally to a neutral message', () => {
     assert.strictEqual(
-      envSummaryOf({ providerId: 'linux-native', providerLabel: 'Linux · 原生（gcc + lcov 全语义）', wsl: null, managed: null, osx: null }),
+      envSummaryOf({ providerId: 'linux-native', providerLabel: 'Linux · 原生（gcc + lcov 全语义）', linux: null, wsl: null, managed: null, osx: null }),
       'Linux · 原生（gcc + lcov 全语义）',
     );
-    assert.strictEqual(envSummaryOf({ providerId: null, providerLabel: '', wsl: null, managed: null, osx: null }), '环境未检测');
+    assert.strictEqual(envSummaryOf({ providerId: null, providerLabel: '', linux: null, wsl: null, managed: null, osx: null }), '环境未检测');
   });
 });
