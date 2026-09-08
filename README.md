@@ -8,7 +8,7 @@
 
 A plain-language engineering cockpit for fcpp-based C/C++ libraries: build, test, dependencies, docs, quality gates, release & board benchmarks — one click each.
 
-![VS Code >= 1.95](https://img.shields.io/badge/VS%20Code-%3E%3D1.95-blue) ![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-green)
+![VS Code >= 1.95](https://img.shields.io/badge/VS%20Code-%3E%3D1.95-blue) ![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-green) ![CI](https://github.com/CubicZebra/HeT-DevTools/actions/workflows/ci.yml/badge.svg)
 
 </div>
 
@@ -108,6 +108,19 @@ fcpp 模板用 Conan / CMake / CI / Doxygen / semantic-release 把工程保障�
 - **卸载即清**：`het.env.remove` 移除托管环境；激活时自动 GC 孤儿目录（无 marker 且无工具产物才清理）；扩展卸载后 `globalStorage` 由 VS Code 清除。
 - 常用命令：`het.getHostCapabilities` / `het.env.status` / `het.env.prepare` / `het.env.remove` / `het.env.gc` / `het.getWslLane` / `het.getMacosLane`；监控 `het.hud.fontSize`（10–20）。
 
+## 平台支持与验证
+
+| 平台 | 架构 | 工具链 | 状态 |
+|------|------|--------|------|
+| Windows | x64 | 本机 MSVC 兼容（`toolchain: system`，coverage none）或 **WSL2 托管 lane**（gcc-13，coverage full） | ✅ 本机 verify 四阶段 + 本地 WSL lane 验证 |
+| Linux | x64 | **linux-managed 隔离 lane**（`~/.het-fti/managed-env`：私有 venv + CONAN_HOME + 生成式 gcc-13 profile + root apt 自愈） | ✅ **真机 CI 验证**（conan create + GTest + lane 覆盖率 lines 76.9% + docs 产物） |
+| macOS | arm64 | macos-native（系统 Apple clang + conan detect） | ✅ **真机 CI 验证**（构建 + GTest + docs）；**覆盖率暂不支持**（Apple clang 无 GNU gcov/lcov，llvm-cov 列入后续） |
+
+- **覆盖率语义**：Linux = full（lane，真机验证）；Windows = full（WSL2 lane）/ none（本机 MSVC 兼容）；macOS = none（当前，规划中）。`activate_code_coverage` 开关与 provider 的 reason/note/label 均已如实标注。
+- **支持的架构**：Windows x64 · Linux x64 · macOS arm64；macOS x64 与 Linux arm64 不在承诺范围。
+- **车道优先（lane-first）**：`managed` 语义一律先走隔离车道（Windows = WSL2 lane、Linux = linux-managed），车道无法自愈或 `toolchain: system` 才回落本机原生——构建/覆盖率/docs 均不 touch 系统或 conda 环境；原生仅作最后手段。
+- **CI（`CubicZebra/HeT-DevTools`，branch main）**：`verify`（ubuntu/macos/windows：tsc/lint/单测/vsix 打包）+ `platform-real`（ubuntu-latest / macos-latest 真机扩展宿主：conan create + GTest + docs，ubuntu 另含 lane 覆盖率报告；**workflow_dispatch 手动触发**）。收敛基线：run `34196799144` 全绿；详细证据见开发文档 `workspace/develope/platform-verification-report.md`。
+
 ## 开发
 
 ```powershell
@@ -116,8 +129,10 @@ npm install
 npm run check          # tsc --noEmit
 npm run compile        # esbuild → out/extension.js
 npm test               # 单元测试（mocha）
-npm run test:c1..c4    # 各阶段端到端（C1~C4，离线可用）
-npm run package        # vsce package → .vsix（本地 dry-run）
+npm run test:c1..c7   # 各阶段端到端（C1~C7，离线可用）
+npm run test:real     # 真机扩展宿主（macOS/Linux CI 用；Windows 本机不跑）
+node scripts/verify-installed.mjs  # 安装态四阶段 verify（Windows 本机）
+npm run package       # vsce package → .vsix（本地 dry-run）
 ```
 
 按 F5 启动 Extension Development Host；打开含 `metadata.json` 的 fcpp 项目即可触发激活。

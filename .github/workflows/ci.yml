@@ -46,15 +46,12 @@ jobs:
           if-no-files-found: error
 
   # P2 platform REAL run — macOS native + Linux extension host driving a REAL
-  # conan build through the extension (fixture = COMMITTED assets/template with
-  # coverage off so macOS needs no GNU lcov/gcov; the coverage lane stays on
-  # Linux/WSL DoD + local verify). This is the gate being iterated in the fix
-  # loop, so it only runs on: workflow_dispatch, or a push whose commit message
-  # contains [platform-real] — ordinary pushes skip it (quota-friendly). Once
-  # converged, drop the keyword clause to make it fully manual-only.
+  # conan build through the extension (fixture = COMMITTED assets/template;
+  # coverage ON on the Linux lane / OFF on macOS). Converged (run
+  # 34196799144 all green) → now MANUAL ONLY (workflow_dispatch) to save quota.
   platform-real:
     name: platform-real (${{ matrix.os }})
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[platform-real]')
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:

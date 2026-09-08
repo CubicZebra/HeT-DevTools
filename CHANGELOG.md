@@ -19,6 +19,14 @@ All notable changes follow [Conventional Commits](https://www.conventionalcommit
 
 - **环境耦合单测注入化（D3）**：`toolchainDiscovery` 支持 `rootCandidates` 注入，测试不再触碰真实目录。
 
+### 平台真机收敛（P2 · platform-real，2026-09-08）
+
+- **真机验证 job**：`.github/workflows/ci.yml` 新增 `platform-real`（ubuntu-latest + macos-latest），在**真实扩展宿主**里驱动 `conan create + GTest + docs`（fixture = 打包内置模板 `assets/template`；Linux lane 保留 coverage，macOS 关闭）；`verify` job 扩为 ubuntu/macos/windows。收敛后触发改为 **workflow_dispatch-only**（省额度）。
+- **六项平台决策落地**：① macOS 覆盖率 = none（Apple clang 无 GNU gcov/lcov，llvm-cov 列入后续，reason/note/label 明示）；② Linux build+docs 先走 managed lane（linux-managed），原生仅当 lane 不可用 / `toolchain: system`；③ 真机 docs 双平台闭环（macOS 原生 + Linux lane）；④ 原生缺 conan 默认 profile 时自动 `conan profile detect`（仅缺失、绝不覆盖已有）；⑤ 支持架构 = Windows x64 / Linux x64 / macOS arm64（macOS x64、Linux arm64 不支持）。
+- **headless 文档构建**：`het.docs` 仅打开面板（构建需 webview 消息）→ 新增 `het.docsRun`（复用同一 runner，含 WSL2/Linux lane + 原生分派）与 `het.getLastDocsOutput`，供真机宿主与自动化直接驱动。
+- **真机结果**（run `34196799144` 全绿）：ubuntu-latest = linux-managed lane 构建 + GTest 3/3 + lane 内 lcov/genhtml `coverage_report`（lines 76.9%）+ lane docs（doxygen/sphinx 产物）；macos-latest = apple-clang 原生构建 + GTest + 原生 docs（conan venv python：numpy/sphinx）。verify 三平台均绿（unit 322）。
+- **关键修复**：`rootAptLinux` 不再把 `sudo -n` 当 `apt-get` 参数（apt 报 `option 'n' is not understood`）→ `sudo` 作为命令执行；`linkGcov13` 改走 `sudo -n bash -c`；macOS 原生 docs 的 python 首选 = 解析到的 conan 同目录解释器（PATH 在 macOS 扩展宿主被重继承，`which` 会命中无 numpy 的 system python）并加 `import numpy` 探针；realBuild 覆盖率断言改目录感知（`coverage_report` 是目录不是文件）。本地 WSL lane 复现覆盖率 76.9% 与 CI 同源。
+
 ## [0.3.3] - 2026-09-08
 
 ### Fixed
