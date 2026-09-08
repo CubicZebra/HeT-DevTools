@@ -1,0 +1,94 @@
+# P2 (marketplace-readiness): quota-scoped platform verification.
+#
+# Policy (user-confirmed):
+#   - macOS is the ESSENTIAL gate (macos-native unverified locally).
+#   - ubuntu-latest is OPTIONAL / manual-only (quota; also validates the A3
+#     Linux managed-lane decision/display + native build on a real Linux host).
+#   - Both jobs are workflow_dispatch ONLY in this draft. After the first
+#     green macOS run you may add `push: branches: [main]` to the macos job
+#     (see the commented trigger below) — do NOT auto-run ubuntu on push.
+#
+# Draft v1 — iterate in the P2 fix loop with real runner logs.
+name: platform-verify
+
+on:
+  workflow_dispatch:
+
+jobs:
+  macos-essential:
+    name: macOS essential (macos-native)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Static gates (tsc / eslint / unit)
+        run: |
+          npm run check
+          npm run lint
+          npm test
+
+      - name: Bootstrap a PATH conan (native lane runtime)
+        run: |
+          python3 -m venv /tmp/het-conan
+          /tmp/het-conan/bin/pip install --quiet "conan>=2,<3"
+          echo "/tmp/het-conan/bin" >> "$GITHUB_PATH"
+
+      - name: Package vsix
+        run: npm run package
+
+      - name: Verify installed vsix (empty / proj / matrix / scrub)
+        # Real macos-native host: provider decision (darwin row), conan-ready
+        # fact, and a REAL conan create through the extension on macOS.
+        run: node scripts/verify-installed.mjs
+
+  ubuntu-manual:
+    name: Ubuntu manual (linux-managed / linux-native)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: System packages for the Linux lane / coverage
+        # ubuntu runners have passwordless sudo (the A3 linux-managed lane
+        # self-heal path); lcov/doxygen needed by the native coverage run.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lcov gcc-13 doxygen graphviz
+
+      - name: Static gates
+        run: |
+          npm run check
+          npm run lint
+          npm test
+
+      - name: Bootstrap a PATH conan (native fallback runtime)
+        run: |
+          python3 -m venv /tmp/het-conan
+          /tmp/het-conan/bin/pip install --quiet "conan>=2,<3"
+          echo "/tmp/het-conan/bin" >> "$GITHUB_PATH"
+
+      - name: Package vsix
+        run: npm run package
+
+      - name: Verify installed vsix under xvfb (real Linux host)
+        # linux-managed provider (apt + passwordless sudo detected) + real
+        # conan create. NOTE (P1-B-5): runConanOnce's linux managed arm is
+        # intentionally deferred — this job drives the P2-B fix loop.
+        run: xvfb-run -a node scripts/verify-installed.mjs
