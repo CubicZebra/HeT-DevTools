@@ -4,19 +4,27 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { discoverConanRuntime, runtimeFromExePath, defaultCondaRoots } from '../core/condaEnv';
 
+// conda keeps binaries in envs/<name>/Scripts on Windows and envs/<name>/bin
+// on POSIX (Linux/macOS); the runner OS decides which layout the code probes,
+// so the hermetic fake tree must mirror the CURRENT platform (CI runs the same
+// suite on win32/linux/darwin).
+const isWin = process.platform === 'win32';
+const exeFile = isWin ? 'conan.exe' : 'conan';
+const binRel = isWin ? 'Scripts' : 'bin';
+
 const fakeRoot = join(tmpdir(), 'het-conda-test');
 
 function fakeRootTree(): string {
   rmSync(fakeRoot, { recursive: true, force: true });
-  const scripts = join(fakeRoot, 'envs', 'build', 'Scripts');
-  const other = join(fakeRoot, 'envs', 'zzz', 'Scripts');
-  const baseScripts = join(fakeRoot, 'Scripts');
+  const scripts = join(fakeRoot, 'envs', 'build', binRel);
+  const other = join(fakeRoot, 'envs', 'zzz', binRel);
+  const baseScripts = join(fakeRoot, binRel);
   mkdirSync(scripts, { recursive: true });
   mkdirSync(other, { recursive: true });
   mkdirSync(baseScripts, { recursive: true });
-  writeFileSync(join(scripts, 'conan.exe'), '');
-  writeFileSync(join(other, 'conan.exe'), '');
-  writeFileSync(join(baseScripts, 'conan.exe'), '');
+  writeFileSync(join(scripts, exeFile), '');
+  writeFileSync(join(other, exeFile), '');
+  writeFileSync(join(baseScripts, exeFile), '');
   return fakeRoot;
 }
 
@@ -26,8 +34,8 @@ describe('condaEnv discovery (environment sniffing)', () => {
     const rt = await discoverConanRuntime({ roots: [root] });
     assert.ok(rt, 'must discover the fake root');
     assert.strictEqual(rt!.envName, 'build');
-    assert.strictEqual(rt!.exe, join(root, 'envs', 'build', 'Scripts', 'conan.exe'));
-    assert.ok(rt!.pathPrefix.includes('Scripts'), 'prefix must expose Scripts');
+    assert.strictEqual(rt!.exe, join(root, 'envs', 'build', binRel, exeFile));
+    assert.ok(rt!.pathPrefix.includes(binRel), 'prefix must expose the platform bin dir');
     assert.ok(rt!.pathPrefix.includes(join('envs', 'build')), 'prefix must include the env dir');
     assert.ok(rt!.pathPrefix.includes('condabin'), 'prefix must include condabin');
   });

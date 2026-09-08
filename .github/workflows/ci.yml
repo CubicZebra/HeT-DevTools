@@ -2,7 +2,7 @@ name: CI (lint / test / package)
 
 "on":
   push:
-    branches: [master, main]
+    branches: [main]
   pull_request:
 
 jobs:
@@ -17,10 +17,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -46,22 +46,23 @@ jobs:
           if-no-files-found: error
 
   # Extension-host smoke against VS Code 1.95 (browser-less, headless download).
+  # ubuntu runners have no display: run under xvfb like standard vscode CI.
   integration:
     name: extension-host smoke (VS Code 1.95)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - run: npm ci
 
       - name: Extension host smoke (activation + cockpit)
-        run: npm run test:integration
+        run: xvfb-run -a npm run test:integration
         env:
           VSCODE_VERSION: "1.95.0"
 
