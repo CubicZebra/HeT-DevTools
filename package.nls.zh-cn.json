@@ -30,5 +30,11 @@
   "cmd.templateUpdate": "HeT DevTools: 检查模板更新",
   "cmd.cockpit": "HeT DevTools: 仪表盘",
   "cmd.chipOverview": "HeT DevTools: 打开监控概况",
-  "cmd.newProjectHere": "HeT DevTools: 在此初始化 fcpp 项目"
+  "cmd.newProjectHere": "HeT DevTools: 在此初始化 fcpp 项目",
+  "cmd.refreshConanIndex": "HeT DevTools: 刷新 ConanCenter 依赖索引",
+  "cmd.envCheck": "HeT DevTools: 检查开发环境",
+  "cmd.openDocsArtifact": "HeT DevTools: 打开文档产物（Sphinx/Doxygen）",
+  "cmd.openBuildOutput": "HeT DevTools: 打开构建输出",
+  "cmd.openCoverageReport": "HeT DevTools: 打开覆盖率报告",
+  "cmd.healthReport": "HeT DevTools: 工程健康明细"
 }

@@ -114,7 +114,7 @@
       },
       {
         "command": "het.refreshConanIndex",
-        "title": "HeT DevTools: 刷新 ConanCenter 依赖索引"
+        "title": "%cmd.refreshConanIndex%"
       },
       {
         "command": "het.newModule",
@@ -191,6 +191,26 @@
       {
         "command": "het.cockpit",
         "title": "%cmd.cockpit%"
+      },
+      {
+        "command": "het.envCheck",
+        "title": "%cmd.envCheck%"
+      },
+      {
+        "command": "het.openDocsArtifact",
+        "title": "%cmd.openDocsArtifact%"
+      },
+      {
+        "command": "het.openBuildOutput",
+        "title": "%cmd.openBuildOutput%"
+      },
+      {
+        "command": "het.openCoverageReport",
+        "title": "%cmd.openCoverageReport%"
+      },
+      {
+        "command": "het.healthReport",
+        "title": "%cmd.healthReport%"
       }
     ],
     "menus": {

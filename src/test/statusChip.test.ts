@@ -8,7 +8,6 @@ const projectModel = (over: Partial<ChipModel> = {}): ChipModel => ({
   lastBuildOk: true,
   test: { passed: 7, failed: 0, skipped: 1 },
   templateBehind: 0,
-  conanEnv: 'conda env build',
   ...over,
 });
 
@@ -140,6 +139,6 @@ describe('statusChip V5-2/V5-6 hover console', () => {
   });
 
   it('is invisible without a project (monitoring only)', () => {
-    assert.strictEqual(chipSpec({ projectName: '', health: null, running: null, lastBuildOk: null, test: null, templateBehind: 0, conanEnv: null }), null);
+    assert.strictEqual(chipSpec({ projectName: '', health: null, running: null, lastBuildOk: null, test: null, templateBehind: 0 }), null);
   });
 });

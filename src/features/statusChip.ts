@@ -28,13 +28,9 @@ export interface ChipModel {
   lastBuildOk: boolean | null;
   test: ChipTest | null;
   templateBehind: number;
-  /** Sniffed conan runtime description (legacy; superseded by envSummary). */
-  conanEnv: string | null;
   /** V4-6 rich rows (optional). */
   buildAgo?: string | null;
   buildType?: string | null;
-  coverage?: number | null;
-  runtimeDetail?: string | null;
   /** V5-2: 开发环境 row — single env sample line (envSample.summary). */
   envSummary?: string | null;
   /** V5-2: 技术文档 row outcome. */

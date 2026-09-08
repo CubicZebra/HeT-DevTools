@@ -7,10 +7,10 @@ export const TEMPLATE_REPO = 'https://github.com/HeT-FTI/fcpp';
 
 /**
  * Development-time pin: equivalent to the local reference copy
- * (main @ 4e7b2855506b4f9ca2f501e7d4019c99619e8ad0).
+ * (main @ f2eaa88f24da26de47a66eb0cb51445be3b28e96).
  * TODO(fcpp 固化): once upstream is frozen + released, replace with the official tag.
  */
-export const TEMPLATE_REF = '4e7b2855506b4f9ca2f501e7d4019c99619e8ad0';
+export const TEMPLATE_REF = 'f2eaa88f24da26de47a66eb0cb51445be3b28e96';
 
 /**
  * Maintainer-only dev/offline override: absolute path to a local fcpp checkout.

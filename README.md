@@ -78,6 +78,8 @@ fcpp 模板用 Conan / CMake / CI / Doxygen / semantic-release 把工程保障�
 | `HeT DevTools: 新增模块` | 成对文件骨架（导入标记/双语注释/@exporter） |
 | `HeT DevTools: 生成测试` | 模式 A 代码驱动 / 模式 B 蓝图先行（测试先行） |
 | `HeT DevTools: 覆盖率视图` | `activate_code_coverage` 引导 + 报告定位打开 |
+| `HeT DevTools: 打开覆盖率报告` | 打开最近生成的覆盖率报告（默认浏览器） |
+| `HeT DevTools: 打开文档产物` | 打开 Sphinx / Doxygen 文档（Doxygen 打开多语言/多版本导航页） |
 | `HeT DevTools: 文档中心` | Doxygen+Sphinx 一键（含 graphviz 本机修正） |
 | `HeT DevTools: 质量与安全` | format / tidy / schema / commitlint / gitleaks / MegaLinter |
 | `HeT DevTools: 提交助手` | 双通道规范提交，commitlint 预检，推送需确认 |
@@ -86,6 +88,10 @@ fcpp 模板用 Conan / CMake / CI / Doxygen / semantic-release 把工程保障�
 | `HeT DevTools: CI 状态` | GitHub Actions（离线降级为本地工作流清单） |
 | `HeT DevTools: 审计报告` | 10 节 Markdown → `workspace/audit-report.md`（可 `@workspace` 引用） |
 | `HeT DevTools: 从模板初始化新项目` / `检查模板更新` | G-21 / G-22（只读对比 + 同步计划） |
+| `HeT DevTools: 检查开发环境` | 重新采集环境样本并回写 chip / 环境视图 |
+| `HeT DevTools: 工程健康明细` | 12 项细粒度体检面板（得分/权重 + 建议） |
+| `HeT DevTools: 项目体检` | 强制重算健康并回写 chip |
+| `HeT DevTools: 打开构建输出` | 聚焦“HeT DevTools”输出面板 |
 | `@het`（Chat） | 意图路由到对应面板 |
 
 ## 隐私与遥测（T-5.2）

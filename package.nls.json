@@ -30,5 +30,11 @@
   "cmd.templateUpdate": "HeT DevTools: Check template updates",
   "cmd.cockpit": "HeT DevTools: Dashboard",
   "cmd.chipOverview": "HeT DevTools: Open overview",
-  "cmd.newProjectHere": "HeT DevTools: Initialize fcpp project here"
+  "cmd.newProjectHere": "HeT DevTools: Initialize fcpp project here",
+  "cmd.refreshConanIndex": "HeT DevTools: Refresh ConanCenter dependency index",
+  "cmd.envCheck": "HeT DevTools: Check development environment",
+  "cmd.openDocsArtifact": "HeT DevTools: Open docs artifact (Sphinx/Doxygen)",
+  "cmd.openBuildOutput": "HeT DevTools: Open build output",
+  "cmd.openCoverageReport": "HeT DevTools: Open coverage report",
+  "cmd.healthReport": "HeT DevTools: Project health details"
 }

@@ -3354,10 +3354,8 @@ async function refreshChip(): Promise<void> {
       ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped }
       : null,
     templateBehind: st.top.templateBehind,
-    conanEnv: conanRuntime ? (conanRuntime.overrideUser ? '用户自定义' : conanRuntime.envName ? `conda env ${conanRuntime.envName}` : 'PATH') : null,
     buildAgo: agoText(lastBuildAt || undefined),
     buildType: currentProject?.metadata?.build_type ?? null,
-    runtimeDetail: conanRuntimeDetail(),
     envSummary,
     docs: docs.state,
     docsDoxygen: docs.doxygen,

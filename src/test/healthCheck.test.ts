@@ -123,6 +123,23 @@ describe('healthCheck', () => {
     assert.strictEqual(green.checks.find((c) => c.id === 'state.tests')?.grade, 1);
   });
 
+  it('C1: every non-ok graded check carries a concrete next-step suggestion', async () => {
+    const r = await runHealthCheck({
+      project: project(meta()),
+      tools: {},
+      state: {},
+      coverage: { found: false, line: null },
+    });
+    const find = (id: string) => r.checks.find((c) => c.id === id)!;
+    assert.ok(find('coverage.enabled').suggestion?.includes('生成覆盖率'), 'coverage-on-no-report suggests the one-click action');
+    assert.ok(find('state.build').suggestion?.includes('构建'), 'never-built suggests building');
+    assert.ok(find('state.tests').suggestion?.includes('构建并测试'), 'never-tested suggests build+test');
+    assert.ok(find('env.conan').suggestion?.length, 'missing conan suggests an action');
+    const off = await runHealthCheck({ project: project(meta({ activate_code_coverage: false })), tools: {}, state: {} });
+    const cov = off.checks.find((c) => c.id === 'coverage.enabled')!;
+    assert.ok(cov.suggestion?.includes('项目设置'), 'coverage-off points to the settings panel');
+  });
+
   it('V5-6 graded scoring: build success-without-tests is 0.75 (not full)', async () => {
     const r = await runHealthCheck({
       project: project(meta()),
