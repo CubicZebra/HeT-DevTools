@@ -3129,9 +3129,9 @@ function hudFontSize(): number {
   return typeof n === 'number' && Number.isFinite(n) ? n : 13.5;
 }
 
-/** V4-3: user prefs for provider selection (het.env.allowMingw, default on). */
+/** V4-3: user prefs for provider selection (reserved; no MinGW toggle). */
 function provisionPrefs(): ProvisionPrefs {
-  return { allowMingw: vscode.workspace.getConfiguration('het').get<boolean>('env.allowMingw', true) !== false };
+  return {};
 }
 
 /** V4-6: hide the chip for 5 minutes (Snooze), then it returns. */

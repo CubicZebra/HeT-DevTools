@@ -8,9 +8,10 @@ describe('V4-5 envTopHtml (dashboard env & managed block)', () => {
   });
 
   it('provider decision line: coverage mark + label + reason', () => {
-    const html = envTopHtml({ label: 'Windows · MinGW-w64 自供（可接受降级）', coverage: 'partial', reason: '无 WSL2，MinGW 提供 gcc 构建/测试' }, null);
-    assert.ok(html.includes('!'), 'partial coverage shows a warn mark');
-    assert.ok(html.includes('MinGW'));
+    const html = envTopHtml({ label: 'Windows · 需要启用 WSL2（或设 toolchain=system 用本机 MSVC）', coverage: 'none', reason: '无 WSL2，需启用或走本机兼容' }, null);
+    assert.ok(html.includes('✗'), 'none coverage shows a fail mark');
+    assert.ok(html.includes('需要启用 WSL2'));
+    assert.ok(!html.includes('MinGW'), 'no MinGW degradation wording remains');
     assert.ok(html.includes('说明'));
     assert.ok(html.includes('启发式推断'));
   });

@@ -91,7 +91,7 @@ export async function getWslLaneStatus(force = false): Promise<WslLaneStatus> {
   const distros = await listDistros();
   const status: WslLaneStatus = { available: distros.length > 0, tools: {}, ready: false };
   if (!status.available) {
-    status.note = '未检测到 WSL2 发行版（Windows 上将回退 MinGW 车道）。';
+    status.note = '未检测到 WSL2 发行版（托管车道需要启用 WSL2：wsl --install -d Ubuntu-24.04；或设 metadata.toolchain=system）。';
     cache = { at: Date.now(), status };
     return status;
   }

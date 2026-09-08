@@ -15,8 +15,8 @@ describe('V5-2B envSample (single environment sample)', () => {
 
   it('summarises a ready managed env', () => {
     const s = envSummaryOf({
-      providerId: 'win-mingw',
-      providerLabel: 'Windows · MinGW-w64 自供（可接受降级）',
+      providerId: 'win-wsl-required',
+      providerLabel: 'Windows · 需要启用 WSL2（或设 toolchain=system 用本机 MSVC）',
       managed: { state: 'ready', tools: { conan: '2.32.0', cmake: '4.4.3' } },
       wsl: null,
       osx: null,

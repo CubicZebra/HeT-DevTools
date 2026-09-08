@@ -88,7 +88,7 @@ export async function envConanFact(): Promise<{ conan?: boolean } | undefined> {
     return undefined;
   }
   const plan = await getCurrentProvisionPlan(false).catch(() => null);
-  if (!plan || plan.provider === 'win-mingw') {
+  if (!plan) {
     return undefined; // native fallback: system conan decides
   }
   if (plan.provider === 'win-wsl2-pending') {

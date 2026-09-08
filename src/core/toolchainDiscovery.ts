@@ -310,19 +310,11 @@ export async function discoverTools(opts: DiscoveryOptions = {}): Promise<ToolRo
     rows.push({ key: def.key, label: def.label, exe: '', source: 'missing', sourceDetail: '', overridden: false });
   }
 
-  // WSL informational snapshot (Windows + posix-ish tools)
-  if (opts.wsl !== false) {
-    const wsl = await probeWslTools();
-    for (const def of TOOL_DEFS) {
-      const p = wsl[def.exeNames[0]] ?? wsl[def.key];
-      if (p) {
-        const row = rows.find((r) => r.key === def.key);
-        if (row && row.source === 'missing') {
-          rows[rows.indexOf(row)] = { ...row, exe: p, source: 'wsl', sourceDetail: `WSL（${row.label}）· 仅 WSL 内可用`, informational: true };
-        }
-      }
-    }
-  }
+  // NOTE (A1 marketplace-readiness): the WSL informational snapshot block was
+  // removed — under managed semantics the WSL2 lane is a REAL build lane (env
+  // display comes from getWslLaneStatus, not from this generic sniff), and on
+  // hosts without WSL2 marking a Windows-missing tool as "ok in WSL" was
+  // misleading. probeWslTools stays for tooling/tests only.
 
   // Post-tag managed/optional semantics on the final rows.
   for (const def of TOOL_DEFS) {

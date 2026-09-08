@@ -47,7 +47,7 @@ fcpp 模板用 Conan / CMake / CI / Doxygen / semantic-release 把工程保障�
 
 ## 通用工具链发现（多来源 · 可失败 · 可手动指定）
 
-默认 PowerShell 里找不到工具时，扩展自动多来源嗅探：PATH → conda/mamba 环境（含 base、`~/.conda/envs`、ProgramData 等，优先语义化环境名 build/dev/het）→ uv（`~/.local/share/uv`）→ 工作区 venv；Windows 上还会报告 WSL 内可用的 gcc/g++/make/lcov/gcovr（信息性，不混入 Windows 构建）。找到后自动把对应目录注入子进程 PATH，让 conan 构建、文档（doxygen/graphviz）、质量（clang-format 等）开箱即用。测试依赖（gtest/benchmark）由 conan 托管时显示为“构建时自动获取”，无需主机安装。
+默认 PowerShell 里找不到工具时，扩展自动多来源嗅探：PATH → conda/mamba 环境（含 base、`~/.conda/envs`、ProgramData 等，优先语义化环境名 build/dev/het）→ uv（`~/.local/share/uv`）→ 工作区 venv。找到后自动把对应目录注入子进程 PATH，让 conan 构建、文档（doxygen/graphviz）、质量（clang-format 等）开箱即用；测试依赖（gtest/benchmark）由 conan 托管时显示为“构建时自动获取”，无需主机安装。托管语义（managed）下的真实构建/文档/覆盖率以**车道口径**为准（Windows=WSL2 托管 lane，见下），不以嗅探结果代替。
 
 嗅探**允许失败**：仪表盘概览「环境与工具链」分区逐项显示 ✓/✗ 与来源（conda 推断标注“启发式推断 · 极可能”，可点「手动指定」覆写为确切路径并即时生效，或「清除」恢复自动）；未找到的项绝不阻塞，需要时回退手动指定。一切无需命令行。
 
@@ -103,7 +103,7 @@ fcpp 模板用 Conan / CMake / CI / Doxygen / semantic-release 把工程保障�
 ## 环境初始化器（V4 预览）
 
 - **托管环境**：`het.env.prepare` 在 VS Code 全局存储（`globalStorage`，卸载即清）内自举 Python venv → conan/cmake/ninja，生成 conan profile（`Toolchain 即数据`：版本由 manifest 决定，profile 只生成不探测）。
-- **平台决策**：`het.env.status` 按宿主能力返回 Provider（`linux-native` / `win-wsl2` / `win-mingw` / `macos-native` …）；WSL 存在即走 Linux 语义（含 `win-wsl2-pending` 引导创建托管 distro `het-fcpp`）；MinGW 受 `het.env.allowMingw` 门控（默认开）。
+- **平台决策**：`het.env.status` 按宿主能力返回 Provider（`linux-native` / `win-wsl2` / `win-wsl2-pending` / `win-wsl-required` / `macos-native` …）；WSL 存在即走 Linux 语义；无可用 WSL2 时明确引导启用（`wsl --install -d Ubuntu-24.04`）或设 `toolchain: system` 走本机 MSVC 兼容（无覆盖率），**不再静默降级**。
 - **构建走环境车道（V5-1）**：`managed` 语义项目在 Windows 上自动经 **WSL2 托管车道**构建（`wsl.exe` 内 Linux gcc-13 + gcov/lcov，与 Linux 同语义）；车道在发行版内自举私有 venv（conan/cmake/ninja）+ 私有 `CONAN_HOME` + 生成式 profile，**不触碰**发行版的 conda base / FEniCS 等其他环境；缺 `python3-venv` 自动免密 root `apt` 自愈；诊断路径自动映射回 Windows“问题”面板。`metadata.toolchain: system` 则走本机工具链（显式兼容模式，默认不推荐）。
 - **卸载即清**：`het.env.remove` 移除托管环境；激活时自动 GC 孤儿目录（无 marker 且无工具产物才清理）；扩展卸载后 `globalStorage` 由 VS Code 清除。
 - 常用命令：`het.getHostCapabilities` / `het.env.status` / `het.env.prepare` / `het.env.remove` / `het.env.gc` / `het.getWslLane` / `het.getMacosLane`；监控 `het.hud.fontSize`（10–20）。

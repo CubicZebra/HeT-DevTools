@@ -53,26 +53,21 @@ describe('V4-1 provisionPlan', () => {
     const d = resolveProviderDecision(caps({ platform: 'win32', wslAvailable: true, wslDefaultReady: false }));
     assert.strictEqual(d.provider, 'win-wsl2-pending');
     assert.strictEqual(d.coverage, 'partial');
-    assert.ok(d.note.includes('托管 distro'), 'note must guide creating the managed distro');
+    assert.ok(d.note.includes('wsl --install'), 'note must guide creating the distro');
+    assert.ok(d.note.includes('toolchain=system'), 'note must mention explicit system-compat opt-in');
     assert.ok(!d.note.includes('MinGW'), 'no silent MinGW degradation when WSL exists');
   });
 
-  it('win32 + no wsl → mingw when allowed (default), never auto-msvc', () => {
+  it('win32 + no wsl → win-wsl-required (explicit guidance, never auto-msvc)', () => {
     const plain = resolveProviderDecision(caps({ platform: 'win32' }));
-    assert.strictEqual(plain.provider, 'win-mingw');
-    assert.strictEqual(plain.coverage, 'partial');
+    assert.strictEqual(plain.provider, 'win-wsl-required');
+    assert.strictEqual(plain.coverage, 'none');
+    assert.ok(plain.note.includes('wsl --install'), 'guide to enable WSL');
     // MSVC present must NOT switch provider — only an explicit override does.
     const withMsvc = resolveProviderDecision(caps({ platform: 'win32', msvcAvailable: true }));
-    assert.strictEqual(withMsvc.provider, 'win-mingw');
+    assert.strictEqual(withMsvc.provider, 'win-wsl-required');
     assert.ok(withMsvc.note.includes('MSVC'), 'note should mention the explicit compat mode');
-  });
-
-  it('allowMingw=false + no wsl → win-wsl-required with guidance (no lane)', () => {
-    const d = resolveProviderDecision(caps({ platform: 'win32' }), { allowMingw: false });
-    assert.strictEqual(d.provider, 'win-wsl-required');
-    assert.strictEqual(d.coverage, 'none');
-    assert.ok(d.note.includes('wsl --install'), 'guide to enable WSL');
-    assert.ok(d.note.includes('het.env.allowMingw'), 'mention how to re-open the compat lane');
+    assert.ok(!withMsvc.note.includes('MinGW'), 'no MinGW degradation wording remains');
   });
 
   it('unsupported platform reported honestly', () => {
@@ -104,7 +99,7 @@ describe('V4-1 provisionPlan', () => {
       ...caps({}),
       ...parseFakeHost(json),
     } as HostCapabilities);
-    assert.strictEqual(mk('{"platform":"win32"}').provider, 'win-mingw');
+    assert.strictEqual(mk('{"platform":"win32"}').provider, 'win-wsl-required');
     assert.strictEqual(mk('{"platform":"win32","wslAvailable":true,"wslDefaultReady":true}').provider, 'win-wsl2');
     assert.strictEqual(mk('{"platform":"linux"}').provider, 'linux-native');
     assert.strictEqual(mk('{"platform":"darwin"}').provider, 'macos-native');
