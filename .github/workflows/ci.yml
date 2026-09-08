@@ -78,11 +78,31 @@ jobs:
           /tmp/het-conan/bin/pip install --quiet "conan>=2,<3"
           echo "/tmp/het-conan/bin" >> "$GITHUB_PATH"
 
+      # conan 2 needs a default profile before the first `create`; fresh
+      # runners have none (~/.conan2/profiles/default missing -> error). Detect
+      # once so the native lane can build (gcc on Linux, apple-clang on macOS).
+      - name: Conan default profile detect (fresh runners)
+        run: conan profile detect --force
+
       - name: Ensure macOS build tools (cmake/ninja)
         if: runner.os == 'macOS'
         run: |
           command -v cmake >/dev/null 2>&1 || brew install cmake
           command -v ninja >/dev/null 2>&1 || brew install ninja
+
+      # @vscode/test-electron's own macOS download+unzip is unreliable on the
+      # runners (spawn .../MacOS/Electron ENOENT); install VS Code via the brew
+      # cask to a fixed path that scripts/run-real.mjs detects and reuses.
+      - name: Install VS Code (macOS, brew cask)
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          if [ ! -d "/Applications/Visual Studio Code.app" ]; then
+            brew install --cask visual-studio-code
+          fi
+          test -x "/Applications/Visual Studio Code.app/Contents/MacOS/Electron"
 
       - name: REAL extension-host build (VS Code 1.95; xvfb on headless Linux)
         run: |
