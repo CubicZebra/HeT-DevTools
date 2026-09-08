@@ -50,7 +50,7 @@ import { parseRemoteOrigin, parseWorkflowYaml } from './core/ciStatus';
 import { GithubAuthService, createGhAuthChecker, AuthInfo } from './core/githubAuthService';
 import { renderAuditMarkdown, AuditInput } from './core/auditReport';
 import { renderSearchQuery, renderTechDisclosure, PatentInput } from './core/patent';
-import { resolveTemplateSource, resolveCloneRef } from './core/templateService';
+import { resolveTemplateSource, resolveCloneRef, recommendedAnchors } from './core/templateService';
 import { discoverTools, TOOL_DEFS, ToolRow } from './core/toolchainDiscovery';
 import { getCurrentProvisionPlan, getHostCapabilities } from './features/env/provisionHost';
 import { providerLabel, ProvisionPrefs } from './core/provisionPlan';
@@ -2819,20 +2819,28 @@ async function newProjectFromTemplate(opts: NewProjectOpts): Promise<{ ok: boole
       return { ok: false, message: `在线克隆失败（${repo}）且无本地模板可用。请检查网络或配置本地模板。` };
     }
   } else {
-    // pinned (recommended) → local. NOTE: the final gate must be the actual
-    // template outcome (remote OR local fallback), not just the remote flag —
-    // otherwise an offline machine with a bundled template wrongly reports
-    // "无本地模板可用" (regression caught by verify-installed).
-    const decision = resolveCloneRef(source, 'recommended', { releases: [], tags: [] });
-    ok = await tryRemote(decision.cloneRef, decision.label);
-    if (!ok) {
-      ok = await tryLocal();
+    // pinned (recommended) → local. D-E3 default chain: TEMPLATE_TAG (release)
+    // → TEMPLATE_REF (fixed hash) → local/bundled asset template. NOTE: the
+    // final gate must be the actual template outcome (remote OR local
+    // fallback), not just the remote flag — otherwise an offline machine with
+    // a bundled template wrongly reports "无本地模板可用" (regression caught
+    // by verify-installed).
+    const anchors = recommendedAnchors(source);
+    const chain = anchors.length ? anchors : [{ ref: 'main', label: 'main（未锁定）' }];
+    for (const a of chain) {
+      ok = await tryRemote(a.ref, a.label);
       if (ok) {
-        fallbackNote = '在线不可用，已自动回退到本地模板。';
+        break;
       }
     }
     if (!ok) {
-      return { ok: false, message: `在线克隆失败（${decision.cloneRef}）且无本地模板可用。请检查网络或配置本地模板。` };
+      ok = await tryLocal();
+      if (ok) {
+        fallbackNote = '在线不可用（tag/固定哈希均失败），已自动回退到本地模板。';
+      }
+    }
+    if (!ok) {
+      return { ok: false, message: `在线克隆失败（${chain.map((c) => c.ref).join(' → ')}）且无本地模板可用。请检查网络或配置本地模板。` };
     }
   }
   if (tplDir === dest) {

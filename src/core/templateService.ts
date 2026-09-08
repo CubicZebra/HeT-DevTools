@@ -1,4 +1,4 @@
-import { TEMPLATE_LOCAL_PATH, TEMPLATE_REF, TEMPLATE_REPO } from './templateDefaults';
+import { TEMPLATE_LOCAL_PATH, TEMPLATE_REF, TEMPLATE_REPO, TEMPLATE_TAG } from './templateDefaults';
 
 /**
  * Resolve the template origin used to bootstrap new fcpp projects (D-8).
@@ -44,6 +44,36 @@ export interface CloneDecision {
   isMain: boolean;
   /** true when the source is the maintainer's local dev copy. */
   isLocal: boolean;
+}
+
+export interface TemplateAnchor {
+  /** git ref handed to `git clone --branch <ref>`. */
+  ref: string;
+  /** Human label for the UI/log (D-E3). */
+  label: string;
+}
+
+/**
+ * D-E3: maintainer-anchored bootstrap chain for the DEFAULT (recommended) path.
+ * Order is fixed: TEMPLATE_TAG (official release) → TEMPLATE_REF (fixed hash).
+ * The caller falls back to the bundled asset template when every anchor fails
+ * (offline / unknown ref) — the third rung of the chain.
+ * Local-mode sources return no remote anchors (they ARE the template).
+ * `tag` is injectable so tests can simulate a future upstream release.
+ */
+export function recommendedAnchors(source: TemplateSource, tag = TEMPLATE_TAG): TemplateAnchor[] {
+  if (source.mode !== 'remote') {
+    return [];
+  }
+  const out: TemplateAnchor[] = [];
+  if (tag) {
+    out.push({ ref: tag, label: `推荐 · Release ${tag}` });
+  }
+  if (source.ref && source.ref !== tag) {
+    const pretty = source.ref.length > 12 ? source.ref.slice(0, 12) : source.ref;
+    out.push({ ref: source.ref, label: `推荐 · 锁定 ${pretty}` });
+  }
+  return out;
 }
 
 /** Build the source for a project bootstrap. Local override wins for dev/offline. */

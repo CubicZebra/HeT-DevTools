@@ -2,6 +2,7 @@ import * as assert from 'node:assert';
 import { TEMPLATE_REF, TEMPLATE_REPO } from '../core/templateDefaults';
 import {
   RemoteVersionData,
+  recommendedAnchors,
   resolveCloneRef,
   resolveTemplateSource,
 } from '../core/templateService';
@@ -18,6 +19,32 @@ describe('templateService.resolveTemplateSource', () => {
     const src = resolveTemplateSource('C:/dev/fcpp');
     assert.strictEqual(src.mode, 'local');
     assert.strictEqual(src.localPath, 'C:/dev/fcpp');
+  });
+});
+
+describe('templateService.recommendedAnchors (D-E3 default chain)', () => {
+  const remoteSrc = { mode: 'remote' as const, repo: TEMPLATE_REPO, ref: TEMPLATE_REF };
+
+  it('tag set → [release tag, fixed hash] — tag first', () => {
+    const a = recommendedAnchors(remoteSrc, 'v0.3.0');
+    assert.strictEqual(a.length, 2);
+    assert.strictEqual(a[0].ref, 'v0.3.0');
+    assert.strictEqual(a[1].ref, TEMPLATE_REF);
+  });
+
+  it('no tag (upstream not yet released) → [fixed hash] only', () => {
+    const a = recommendedAnchors(remoteSrc, '');
+    assert.deepStrictEqual(a.map((x) => x.ref), [TEMPLATE_REF]);
+  });
+
+  it('ref already equals the tag → not duplicated', () => {
+    const a = recommendedAnchors({ mode: 'remote', repo: TEMPLATE_REPO, ref: 'v0.3.0' }, 'v0.3.0');
+    assert.strictEqual(a.length, 1);
+    assert.strictEqual(a[0].ref, 'v0.3.0');
+  });
+
+  it('local mode → no remote anchors (it IS the template)', () => {
+    assert.deepStrictEqual(recommendedAnchors({ mode: 'local', localPath: 'C:/dev/fcpp' }), []);
   });
 });
 
