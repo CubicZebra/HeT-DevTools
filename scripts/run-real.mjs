@@ -7,7 +7,8 @@
 import { runTests } from '@vscode/test-electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { existsSync, rmSync, readFileSync, writeFileSync, cpSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync, readFileSync, writeFileSync, cpSync, accessSync, constants as fsConsts } from 'node:fs';
+import { platform } from 'node:os';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const tpl = join(root, 'assets', 'template');
@@ -30,13 +31,60 @@ if (meta.activate_code_coverage !== false) {
 }
 console.log('[real] project fixture ready: ' + proj);
 
+function isExec(p) {
+  try {
+    accessSync(p, fsConsts.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// macOS: locate the app's MAIN executable without hardcoding its name (the
+// cask layout has varied: Electron / Visual Studio Code / …). Prefer the known
+// names, else the first executable that is not a Helper.
+function macAppExecutable() {
+  const app = '/Applications/Visual Studio Code.app';
+  const macosDir = join(app, 'Contents', 'MacOS');
+  if (!existsSync(macosDir)) {
+    return undefined;
+  }
+  const known = ['Electron', 'Visual Studio Code', 'Code'];
+  for (const name of known) {
+    const p = join(macosDir, name);
+    if (isExec(p)) {
+      return p;
+    }
+  }
+  let entries = [];
+  try {
+    entries = readdirSync(macosDir);
+  } catch {
+    return undefined;
+  }
+  for (const name of entries) {
+    if (/ Helper(\.app)?$/i.test(name)) {
+      continue;
+    }
+    const p = join(macosDir, name);
+    if (isExec(p)) {
+      return p;
+    }
+  }
+  return undefined;
+}
+
 const candidates = [
   process.env.VSCODE_EXECUTABLE_PATH,
+  ...(platform() === 'darwin' ? [macAppExecutable()] : []),
   'C:/Users/Chen/AppData/Local/Programs/Microsoft VS Code/Code.exe',
   '/usr/bin/code',
   '/Applications/Visual Studio Code.app/Contents/MacOS/Electron',
-];
-const vscodeExecutablePath = candidates.find((p) => p && existsSync(p));
+].filter(Boolean);
+const vscodeExecutablePath = candidates.find((p) => p && existsSync(p) && isExec(p));
+if (vscodeExecutablePath) {
+  console.log('[real] using VS Code executable: ' + vscodeExecutablePath);
+}
 
 async function main() {
   const opts = {

@@ -92,7 +92,8 @@ jobs:
 
       # @vscode/test-electron's own macOS download+unzip is unreliable on the
       # runners (spawn .../MacOS/Electron ENOENT); install VS Code via the brew
-      # cask to a fixed path that scripts/run-real.mjs detects and reuses.
+      # cask to /Applications. scripts/run-real.mjs LOCATES the main executable
+      # inside the .app at runtime (name has varied across versions).
       - name: Install VS Code (macOS, brew cask)
         if: runner.os == 'macOS'
         env:
@@ -102,7 +103,7 @@ jobs:
           if [ ! -d "/Applications/Visual Studio Code.app" ]; then
             brew install --cask visual-studio-code
           fi
-          test -x "/Applications/Visual Studio Code.app/Contents/MacOS/Electron"
+          ls -la "/Applications/Visual Studio Code.app/Contents/MacOS/" || true
 
       - name: REAL extension-host build (VS Code 1.95; xvfb on headless Linux)
         run: |
