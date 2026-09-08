@@ -45,12 +45,22 @@ jobs:
           path: "*.vsix"
           if-no-files-found: error
 
-  # Extension-host smoke against VS Code 1.95 (browser-less, headless download).
-  # ubuntu runners have no display: run under xvfb like standard vscode CI.
-  integration:
-    name: extension-host smoke (VS Code 1.95)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+  # P2 platform REAL run — macOS native + Linux extension host driving a REAL
+  # conan build through the extension (fixture = COMMITTED assets/template with
+  # coverage off so macOS needs no GNU lcov/gcov; the coverage lane stays on
+  # Linux/WSL DoD + local verify). This is the gate being iterated in the fix
+  # loop, so it only runs on: workflow_dispatch, or a push whose commit message
+  # contains [platform-real] — ordinary pushes skip it (quota-friendly). Once
+  # converged, drop the keyword clause to make it fully manual-only.
+  platform-real:
+    name: platform-real (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[platform-real]')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -59,10 +69,29 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Extension host smoke (activation + cockpit)
-        run: xvfb-run -a npm run test:integration
+      - name: Bootstrap conan into PATH (native lane runtime)
+        run: |
+          python3 -m venv /tmp/het-conan
+          /tmp/het-conan/bin/pip install --quiet "conan>=2,<3"
+          echo "/tmp/het-conan/bin" >> "$GITHUB_PATH"
+
+      - name: Ensure macOS build tools (cmake/ninja)
+        if: runner.os == 'macOS'
+        run: |
+          command -v cmake >/dev/null 2>&1 || brew install cmake
+          command -v ninja >/dev/null 2>&1 || brew install ninja
+
+      - name: REAL extension-host build (VS Code 1.95; xvfb on headless Linux)
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a npm run test:real
+          else
+            npm run test:real
+          fi
         env:
           VSCODE_VERSION: "1.95.0"
+
 

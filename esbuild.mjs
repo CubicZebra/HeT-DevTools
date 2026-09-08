@@ -22,6 +22,7 @@ const c4 = args.includes('--c4');
 const c5 = args.includes('--c5');
 const c6 = args.includes('--c6');
 const c7 = args.includes('--c7');
+const real = args.includes('--real');
 
 /** @type {import('esbuild').BuildOptions} */
 const common = {
@@ -146,6 +147,17 @@ function buildOptions() {
       ...common,
       entryPoints: [join(srcDir, 'test', 'integration', 'c7.ts')],
       outfile: join(outDir, 'test-integration', 'c7.js'),
+    });
+  }
+
+  // 11) P2 real host — cross-platform REAL conan build through the extension
+  //     (macOS native / Linux; fixture = committed assets/template, coverage
+  //     disabled so macOS needs no lcov/gcov; run via npm run test:real)
+  if (real) {
+    options.push({
+      ...common,
+      entryPoints: [join(srcDir, 'test', 'integration', 'realBuild.ts')],
+      outfile: join(outDir, 'test-integration', 'realBuild.js'),
     });
   }
   return options;
