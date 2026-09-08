@@ -90,7 +90,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
   'win-wsl2': 'Windows · WSL2 托管 distro（gcc + lcov 全语义）',
   'win-wsl2-pending': 'Windows · WSL2 已装但无发行版（需创建托管 distro）',
   'win-wsl-required': 'Windows · 需要启用 WSL2（或设 toolchain=system 用本机 MSVC）',
-  'macos-native': 'macOS 原生（clang + 自供 lcov）',
+  'macos-native': 'macOS 原生（clang；覆盖率暂不支持）',
   unsupported: '暂不支持该平台',
 };
 
@@ -199,10 +199,10 @@ export function resolveProviderDecision(caps: HostCapabilities, _prefs?: Provisi
   if (caps.platform === 'darwin') {
     return {
       provider: 'macos-native',
-      reason: 'macOS：系统 clang + 自供 lcov/gcovr',
-      coverage: 'full',
+      reason: 'macOS：系统 clang（覆盖率暂不支持：Apple clang 无 GNU gcov/lcov，llvm-cov 适配列入后续）',
+      coverage: 'none',
       manifest: MAN,
-      note: lowDisk(caps) ? '磁盘空间偏低，准备环境可能需要 ≥2 GB。' : 'clang/gcc 差异由 Manifest 版本约束收敛。',
+      note: lowDisk(caps) ? '磁盘空间偏低，准备环境可能需要 ≥2 GB。' : '构建语义完整（真机 CI 验证）；覆盖率请使用 Linux/WSL lane。',
     };
   }
   if (caps.platform === 'win32') {

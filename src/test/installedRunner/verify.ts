@@ -147,7 +147,7 @@ export async function run(): Promise<void> {
       { name: 'win-WSL2', caps: { platform: 'win32', arch: 'x64', wslAvailable: true, wslDefaultReady: true, virtualizationEnabled: true, isAdmin: true, msvcAvailable: true }, provider: 'win-wsl2', coverage: 'full' },
       { name: 'linux-managed', caps: { platform: 'linux', arch: 'x64', isAdmin: true, linuxApt: true, linuxAptSudo: true }, provider: 'linux-managed', coverage: 'full' },
       { name: 'linux-native', caps: { platform: 'linux', arch: 'x64', isAdmin: true, linuxApt: true, linuxAptSudo: false }, provider: 'linux-native', coverage: 'full' },
-      { name: 'macos-native', caps: { platform: 'darwin', arch: 'arm64' }, provider: 'macos-native', coverage: 'full' },
+      { name: 'macos-native', caps: { platform: 'darwin', arch: 'arm64' }, provider: 'macos-native', coverage: 'none' },
     ];
     for (const c of cases) {
       process.env.HET_FAKE_HOST = JSON.stringify(c.caps);

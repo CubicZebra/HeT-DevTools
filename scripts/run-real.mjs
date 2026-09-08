@@ -24,12 +24,13 @@ rmSync(proj, { recursive: true, force: true });
 cpSync(tpl, proj, { recursive: true });
 const metaPath = join(proj, 'metadata.json');
 const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
-// Coverage off for the cross-platform real build (macOS lacks GNU lcov/gcov).
-if (meta.activate_code_coverage !== false) {
+// Coverage stays ON for Linux (the managed lane runs lcov/genhtml — real
+// lane-coverage validation). macOS has no GNU gcov/lcov, so disable it there.
+if (platform() === 'darwin' && meta.activate_code_coverage !== false) {
   meta.activate_code_coverage = false;
   writeFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n', 'utf8');
 }
-console.log('[real] project fixture ready: ' + proj);
+console.log(`[real] project fixture ready: ${proj} (coverage=${meta.activate_code_coverage ? 'on' : 'off'})`);
 
 function isExec(p) {
   try {

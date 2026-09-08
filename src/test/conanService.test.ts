@@ -1,5 +1,30 @@
 import * as assert from 'node:assert';
-import { conanCreateArgs, locateConan } from '../core/conanService';
+import { conanCreateArgs, locateConan, conanDefaultProfilePath } from '../core/conanService';
+
+describe('conanService.conanDefaultProfilePath (P2 fresh-machine detect)', () => {
+  it('defaults to ~/.conan2/profiles/default', () => {
+    delete process.env.CONAN_HOME;
+    const p = conanDefaultProfilePath().replace(/\\/g, '/');
+    assert.ok(p.endsWith('/.conan2/profiles/default'), p);
+  });
+
+  it('honours CONAN_HOME when set', () => {
+    const prev = process.env.CONAN_HOME;
+    process.env.CONAN_HOME = '/custom/conan';
+    try {
+      const p = conanDefaultProfilePath().replace(/\\/g, '/');
+      assert.ok(p.startsWith('/custom/conan/'), p);
+      assert.ok(p.endsWith('/profiles/default'), p);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.CONAN_HOME;
+      } else {
+        process.env.CONAN_HOME = prev;
+      }
+    }
+  });
+});
+
 
 describe('conanService.conanCreateArgs', () => {
   it('native Debug build with --build=missing (canonical form)', () => {

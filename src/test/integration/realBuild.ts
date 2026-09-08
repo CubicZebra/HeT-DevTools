@@ -13,7 +13,7 @@
  * (workflow: .github/workflows/ci.yml › platform-real)
  */
 import * as assert from 'node:assert';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, readdirSync, accessSync, constants as fsConsts } from 'node:fs';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
 
@@ -23,6 +23,53 @@ interface ProviderPlan {
   provider?: string;
   coverage?: string;
   reason?: string;
+}
+
+/** Recursive, bounded search for a file/dir below `root` (skips node_modules). */
+function findUnder(root: string, targetName: string, wantFile: boolean, depth = 0): string | null {
+  if (depth > 9) {
+    return null;
+  }
+  let entries: import('node:fs').Dirent[] = [];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const e of entries) {
+    if (e.name === 'node_modules' || e.name.startsWith('.')) {
+      continue;
+    }
+    const p = join(root, e.name);
+    if (e.name === targetName) {
+      if (!wantFile || e.isFile()) {
+        try {
+          accessSync(p, fsConsts.R_OK);
+          return p;
+        } catch {
+          return null;
+        }
+      }
+    }
+    if (e.isDirectory()) {
+      const sub = findUnder(p, targetName, wantFile, depth + 1);
+      if (sub) {
+        return sub;
+      }
+    }
+  }
+  return null;
+}
+
+/** Parse genhtml index.html line coverage % (same rule as coverage/report). */
+function readCoveragePct(reportDir: string): string {
+  try {
+    const html = readFileSync(join(reportDir, 'index.html'), 'utf8');
+    const m = /(\d+(?:\.\d+)?)\s*%\s*<\/td>\s*<td class="headerCovTableEntryLo">/u.exec(html) ?? /lines:.*?(\d+(?:\.\d+)?)%/u.exec(html);
+    return m?.[1] ?? '?';
+  } catch {
+    return '?';
+  }
 }
 
 export async function run(): Promise<void> {
@@ -64,8 +111,40 @@ export async function run(): Promise<void> {
   assert.ok(summary.passed > 0, 'at least one gtest case should pass');
   assert.strictEqual(summary.failed, 0, 'no gtest failures expected');
 
+  // Linux: the managed lane runs coverage inside conan create (fixture keeps
+  // activate_code_coverage=true on Linux) — the report must exist.
+  if (process.platform === 'linux' && plan?.provider === 'linux-managed') {
+    const proj = join(ext.extensionPath, 'out', 'real-proj');
+    const covIndex = findUnder(proj, 'coverage_report', true);
+    if (!covIndex) {
+      const tail = (await vscode.commands.executeCommand<string>('het.getLastConanOutput')) ?? '';
+      console.log('[real] coverage missing — conan output tail:\n' + tail.slice(-4000));
+    }
+    assert.ok(covIndex, 'Linux lane coverage_report/index.html must exist after the real build');
+    console.log('[real] coverage report: ' + covIndex);
+    const pct = readCoveragePct(covIndex.slice(0, covIndex.lastIndexOf('/')));
+    console.log('[real] coverage lines pct ≈ ' + pct);
+  }
+
+  // Decision 3: docs through the real host on BOTH platforms.
+  console.log('[real] running het.docs (REAL docs build)…');
+  const docsResult = (await vscode.commands.executeCommand('het.docs')) as { ok: boolean; message: string } | undefined;
+  const projRoot = join(ext.extensionPath, 'out', 'real-proj');
+  const doxHtml = findUnder(join(projRoot, 'docs', 'doxygen'), 'docs.html', true) ?? findUnder(join(projRoot, 'docs', 'doxygen'), 'index.html', true);
+  const sphHtml = findUnder(join(projRoot, 'docs', 'sphinx'), 'index.html', true);
+  console.log(`[real] docs result=${JSON.stringify(docsResult)} doxygen=${!!doxHtml} sphinx=${!!sphHtml}`);
+  if (!docsResult || docsResult.ok !== true) {
+    const tail = await vscode.commands
+      .executeCommand<string>('het.getLastDocsOutput')
+      .then((v) => v ?? '', () => '');
+    console.log('[real] docs output tail:\n' + tail.slice(-3000));
+  }
+  assert.ok(docsResult && docsResult.ok === true, 'het.docs should succeed on the real host');
+  assert.ok(doxHtml, 'doxygen artifact (docs.html) must exist after the real docs build');
+  assert.ok(sphHtml, 'sphinx artifact (index.html) must exist after the real docs build');
+
   const evidence = `platform=${process.platform} provider=${plan!.provider} buildOk=${buildOk} passed=${summary.passed} failed=${summary.failed} skipped=${summary.skipped}\n`;
   writeFileSync(join(__dirname, '..', 'real-evidence.txt'), evidence, 'utf8');
   console.log('[real] PASS ' + evidence.trim());
-  console.log(`[real] OK — REAL ${process.platform} build + tests verified through the extension host`);
+  console.log(`[real] OK — REAL ${process.platform} build + tests + docs verified through the extension host`);
 }

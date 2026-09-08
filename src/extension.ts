@@ -2,7 +2,7 @@ import { isAbsolute, join, dirname, delimiter } from 'node:path';
 import { existsSync } from 'node:fs';
 import * as vscode from 'vscode';
 import { EXTENSION_ID, LOG_CHANNEL_NAME, log, setOutputChannel } from './constants';
-import { locateConan, runConanCreate, resolveConanRuntime } from './core/conanService';
+import { locateConan, runConanCreate, resolveConanRuntime, ensureConanDefaultProfile } from './core/conanService';
 import { parseGTestOutput, GTestRunSummary } from './core/gtestRunner';
 import { runHealthCheck, healthGapLabels, verdictZh } from './core/healthCheck';
 import type { HealthReport } from './core/healthCheck';
@@ -62,7 +62,7 @@ import { findCoverageReport, readCoveragePct } from './features/coverage/report'
 import { onStateChange, notifyStateChange } from './features/live';
 import { parseProjectToolchain } from './core/projectToolchain';
 import { getMacosLaneStatus } from './features/env/macosProbe';
-import { getLinuxLaneStatus } from './features/env/linuxLane';
+import { getLinuxLaneStatus, runLinuxConanCreate, runLinuxDocs } from './features/env/linuxLane';
 import { openHudPanel } from './features/hud/panel';
 import { HudEnvRow, HudModel, defaultHudActions, hudEnabled } from './features/hud/hudModel';
 import { TEMPLATE_REPO } from './core/templateDefaults';
@@ -1483,6 +1483,36 @@ function openDocsPanel(context: vscode.ExtensionContext): void {  const locateAr
       if (plan?.provider === 'win-wsl2-pending') {
         finish(false);
         return { ok: false, message: 'managed 文档构建需要 WSL2 发行版（当前无可用发行版）。请先 wsl --install -d Ubuntu-24.04，或把 metadata.toolchain 设为 system。' };
+      }
+    }
+    // A3: Linux + managed → docs INSIDE the native-Linux managed lane (venv
+    // sphinx/numpy + apt doxygen/graphviz/make self-heal, same as the WSL2
+    // lane). Falls through to native python only when no lane is available.
+    if (process.platform === 'linux' && currentProject && (await projectToolchainFor(currentProject)) !== 'system') {
+      const plan = await getCurrentProvisionPlan(false, provisionPrefs()).catch(() => null);
+      if (plan?.provider === 'linux-managed') {
+        await reconcileGraphvizForLane(root);
+        channel?.appendLine(`[docs] Linux 托管车道文档构建：${root}`);
+        emitCockpitEvent({ type: 'log:start', title: 'docs/build.py · Linux lane' });
+        let summary;
+        try {
+          summary = await runLinuxDocs(root, { onStdout: stream, onStderr: stream });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          channel?.appendLine(msg);
+          emitCockpitEvent({ type: 'log:done', ok: false });
+          finish(false);
+          return { ok: false, message: msg };
+        }
+        const artifacts = await locateArtifacts(root);
+        const ok = summary.ok;
+        log(`[docs] linux lane finished ok=${ok} artifacts=${artifacts.length}`);
+        emitCockpitEvent({ type: 'log:done', ok });
+        finish(ok);
+        if (!ok) {
+          return { ok: false, message: '文档生成失败（Linux 车道）：请查看“输出 → HeT DevTools”。' };
+        }
+        return { ok: true, message: `文档生成完成，找到 ${artifacts.length} 个产物页面（Linux 车道）。` };
       }
     }
     const python = await which('python');
@@ -3654,6 +3684,50 @@ async function runConanOnce(project: FcppProject): Promise<{ ok: boolean; stdout
       log(`[conan] 未启用 WSL2 车道：provider=${plan?.provider ?? '?'} toolchain=${tc}`);
     }
   }
+  // A3: managed semantics on an apt + passwordless-root Linux host → build
+  // INSIDE the native-Linux managed lane (~/.het-fti/managed-env — the same
+  // isolation the WSL2 lane gives Windows). Native (system/conda conan) is used
+  // only when the lane cannot self-provision (linux-native provider) or when
+  // metadata.toolchain=system is explicit (lane-first, native = last resort).
+  const isLinuxManaged = !isWin && process.platform === 'linux' && tc !== 'system';
+  let linuxManaged = false;
+  if (isLinuxManaged) {
+    const plan = await getCurrentProvisionPlan(false, provisionPrefs()).catch(() => null);
+    if (plan?.provider === 'linux-managed') {
+      linuxManaged = true;
+    } else {
+      log(`[conan] Linux 无隔离车道（provider=${plan?.provider ?? '?'}）→ 走原生；需要 apt+免密 root 才会启用 managed lane。`);
+    }
+  }
+  if (linuxManaged) {
+    log(`[conan] Linux 托管车道：${project.root}${forceSelf ? ` forceSelf=${forceSelf}` : ''}`);
+    emitCockpitEvent({ type: 'log:start', title: `conan create . (Debug) · Linux lane` });
+    let summary: { ok: boolean; stdout: string; stderr: string };
+    try {
+      const s = await runLinuxConanCreate(project.root, {
+        buildType: 'Debug',
+        forceSelf,
+        onStdout: (c) => {
+          channel?.append(c);
+          emitCockpitEvent({ type: 'log:append', line: c.replace(/\s+$/u, '') });
+        },
+        onStderr: (c) => {
+          channel?.append(c);
+          emitCockpitEvent({ type: 'log:append', line: c.replace(/\s+$/u, '') });
+        },
+      });
+      summary = s;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      channel?.appendLine(msg);
+      emitCockpitEvent({ type: 'log:done', ok: false });
+      throw new Error(msg);
+    }
+    lastConanOutput = `${summary.stdout}\n${summary.stderr}`;
+    channel?.appendLine('');
+    emitCockpitEvent({ type: 'log:done', ok: summary.ok });
+    return { ok: summary.ok, stdout: summary.stdout, stderr: summary.stderr };
+  }
   if (wslDistro) {
     log(`[conan] WSL2 托管车道：distro=${wslDistro} · ${project.root}${forceSelf ? ` forceSelf=${forceSelf}` : ''}`);
     emitCockpitEvent({ type: 'log:start', title: `conan create . (Debug) · WSL2 ${wslDistro}` });
@@ -3688,6 +3762,14 @@ async function runConanOnce(project: FcppProject): Promise<{ ok: boolean; stdout
   const configured = vscode.workspace.getConfiguration('het').get<string[]>('conan.profiles', []);
   const envProfiles = (process.env.HET_CONAN_PROFILES ?? '').split(';').filter((p) => p.length > 0);
   const profiles = [...configured, ...envProfiles];
+
+  // P2 (fresh machines / native): conan 2 refuses to run without a default
+  // profile. When no extra profile is pinned, auto `conan profile detect` only
+  // if the default is missing (never overwrite an existing user profile).
+  if (profiles.length === 0) {
+    const okProfile = await ensureConanDefaultProfile(conanExe);
+    log(`[conan] native 默认 profile ${okProfile ? 'ok' : '缺失且 detect 失败（conan 将报错，建议手动 conan profile detect）'}`);
+  }
 
   log(`[conan] ${conanExe} create . (Debug) in ${project.root}${profiles.length ? ` profiles=${profiles.join(',')}` : ''}`);
   emitCockpitEvent({ type: 'log:start', title: `conan create . (Debug) · ${project.metadata?.name ?? project.root}` });

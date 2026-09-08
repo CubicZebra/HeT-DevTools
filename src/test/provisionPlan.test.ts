@@ -63,10 +63,11 @@ describe('V4-1 provisionPlan', () => {
     assert.ok(d.note.includes('apt'), 'note explains the apt requirement');
   });
 
-  it('darwin → macos-native with full coverage', () => {
+  it('darwin → macos-native, coverage none (Apple clang has no GNU gcov/lcov)', () => {
     const d = resolveProviderDecision(caps({ platform: 'darwin' }));
     assert.strictEqual(d.provider, 'macos-native');
-    assert.strictEqual(d.coverage, 'full');
+    assert.strictEqual(d.coverage, 'none');
+    assert.ok(d.note.includes('Linux/WSL'), 'note points coverage to Linux/WSL lane');
   });
 
   it('win32 + wsl ready → win-wsl2 (Linux-identical, full)', () => {

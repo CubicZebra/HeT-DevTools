@@ -1,5 +1,7 @@
 import { ExecResult, run, which } from '../utils/exec';
 import { pathExists } from '../utils/fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { CondaConanRuntime, discoverConanRuntime, runtimeFromExePath } from './condaEnv';
 
 /**
@@ -67,6 +69,30 @@ export async function resolveConanRuntime(options: ConanLocationOptions = {}): P
 export async function locateConan(options: ConanLocationOptions = {}): Promise<string | null> {
   const r = await resolveConanRuntime(options);
   return r?.exe ?? null;
+}
+
+/** conan 2's default profile path (CONAN_HOME override, else ~/.conan2). */
+export function conanDefaultProfilePath(): string {
+  const conanHome = (process.env.CONAN_HOME ?? '').trim() || join(homedir(), '.conan2');
+  return join(conanHome, 'profiles', 'default');
+}
+
+/**
+ * P2 (fresh machines / native lane): conan 2 refuses to run without a default
+ * profile. Runs `conan profile detect` ONLY when the default is missing —
+ * never overwrites an existing user profile. Returns whether a default profile
+ * is present afterwards.
+ */
+export async function ensureConanDefaultProfile(conanExe: string): Promise<boolean> {
+  if (await pathExists(conanDefaultProfilePath())) {
+    return true;
+  }
+  try {
+    const r = await run(conanExe, ['profile', 'detect'], { timeoutMs: 120_000 });
+    return r.code === 0;
+  } catch {
+    return false;
+  }
 }
 
 /** Build the canonical `conan create` argument list (see development-plan §9.1). */
