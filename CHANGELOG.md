@@ -2,6 +2,23 @@
 
 All notable changes follow [Conventional Commits](https://www.conventionalcommits.org/) + fcpp emoji superset.
 
+## [0.4.0] - 2026-09-08
+
+### Added
+
+- **Linux 隔离 managed lane（A3，派生优先）**：Linux 宿主检测到 `apt` + 免密 root（uid0 或 `sudo -n`）时 Provider 为 `linux-managed`——在 `~/.het-fti/managed-env` 自举与 WSL2 车道**同构**的隔离车道（私有 venv conan/cmake/ninja + 私有 CONAN_HOME + 生成式 gcc-13 profile + root apt 自愈 python3-venv/gcc-13/lcov/gcov 符号链），不 touch 系统环境；驾驶舱新增「Linux 派生 managed lane · ~/.het-fti/managed-env」块、chip 摘要、HUD 车道双口径、`het.getLinuxLane` 命令；本地 WSL DoD 绿（ensure + `conan create` Release coverage → 76.9%/66.7%，与 CI 同源）。无 apt/免密 root 的宿主保持 `linux-native` 并给出诚实引导文案。
+- **命令可发现性（P1-B-2）**：`package.json > contributes.commands` 补齐 `het.envCheck / het.openDocsArtifact / het.openBuildOutput / het.openCoverageReport / het.healthReport` 等 5 条（共 35 条命令入命令面板），`package.nls.*` 中英文案全量同步。
+- **离线模板回退演练（C7）**：`HET_FORCE_TEMPLATE_OFFLINE=1` 强制走本地内置模板回退的端到端宿主检查。
+
+### Changed
+
+- **移除 win-mingw 静默降级（A1/A2）**：`ProviderId` 去掉 `win-mingw`；Windows 无可用 WSL2 时返回 `win-wsl-required`（coverage none）并明确引导 `wsl --install -d Ubuntu-24.04`，或显式设 `metadata.toolchain: system` 走本机 MSVC 兼容（无覆盖率）——**绝不自动选 MSVC**；`win-wsl2-pending`/`wslProbe` 提示改为可复制命令引导；移除 `toolchainDiscovery` 的 WSL 信息性快照（车道口径为准）。verify 矩阵扩为 5 行（新增 `linux-managed`）。
+- **chip 死字段清理（D1）**：移除 `ChipModel` 遗留的 `conanEnv`/`runtimeDetail`/`coverage`（渲染已被 `envSummary` 与 coverage 报告同源取代）。
+
+### Fixed
+
+- **环境耦合单测注入化（D3）**：`toolchainDiscovery` 支持 `rootCandidates` 注入，测试不再触碰真实目录。
+
 ## [0.3.3] - 2026-09-08
 
 ### Fixed
