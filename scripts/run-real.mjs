@@ -40,8 +40,11 @@ console.log(`[real] project fixture ready: ${proj} (coverage=${meta.activate_cod
 // resolve deterministically (no-op on a dev box without that venv).
 if (platform() !== 'win32') {
   for (const venvBin of ['/tmp/het-conan/bin']) {
-    if (existsSync(join(venvBin, 'python')) && process.env.PATH && !process.env.PATH.split(':').includes(venvBin)) {
-      process.env.PATH = `${venvBin}:${process.env.PATH}`;
+    if (existsSync(join(venvBin, 'python')) && process.env.PATH) {
+      // Force to the FRONT even if already listed (the runner may append the
+      // venv AFTER a system python, which shadows it for which('python')).
+      const parts = process.env.PATH.split(':').filter((p) => p && p !== venvBin);
+      process.env.PATH = `${venvBin}:${parts.join(':')}`;
       console.log('[real] prepended to PATH: ' + venvBin);
     }
   }

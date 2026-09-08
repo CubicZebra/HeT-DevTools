@@ -13,7 +13,7 @@
  * (workflow: .github/workflows/ci.yml › platform-real)
  */
 import * as assert from 'node:assert';
-import { writeFileSync, readFileSync, readdirSync, accessSync, constants as fsConsts } from 'node:fs';
+import { writeFileSync, readFileSync, readdirSync, accessSync, existsSync, constants as fsConsts } from 'node:fs';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
 
@@ -72,6 +72,48 @@ function readCoveragePct(reportDir: string): string {
   }
 }
 
+/**
+ * Bounded recursive search for a DIRECTORY named `coverage_report` holding
+ * index.html (mirrors features/coverage/report.ts — coverage_report is a
+ * folder, never a file, so the generic wantFile walker cannot match it).
+ */
+function findCovReportIndex(root: string, extraRoots: string[] = [], depth = 0): string | null {
+  const idx = join(root, 'coverage_report', 'index.html');
+  if (existsSync(idx)) {
+    return idx;
+  }
+  if (depth > 9) {
+    return null;
+  }
+  let entries: import('node:fs').Dirent[] = [];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const e of entries) {
+    if (e.name === 'node_modules' || e.name.startsWith('.')) {
+      continue;
+    }
+    const p = join(root, e.name);
+    if (e.isDirectory()) {
+      const sub = findCovReportIndex(p, [], depth + 1);
+      if (sub) {
+        return sub;
+      }
+    }
+  }
+  for (const extra of extraRoots) {
+    if (extra && extra !== root) {
+      const sub = findCovReportIndex(extra, [], 0);
+      if (sub) {
+        return sub;
+      }
+    }
+  }
+  return null;
+}
+
 export async function run(): Promise<void> {
   console.log('[real] starting on ' + process.platform);
   const ext = vscode.extensions.getExtension(EXTENSION_ID);
@@ -112,13 +154,16 @@ export async function run(): Promise<void> {
   assert.strictEqual(summary.failed, 0, 'no gtest failures expected');
 
   // Linux: the managed lane runs coverage inside conan create (fixture keeps
-  // activate_code_coverage=true on Linux) — the report must exist.
+  // activate_code_coverage=true on Linux) — the report must exist. coverage_report
+  // is a DIRECTORY under <root>/test_package/test/export/coverage/ (in-place)
+  // or under the lane conan cache; search both (report.ts semantics).
   if (process.platform === 'linux' && plan?.provider === 'linux-managed') {
     const proj = join(ext.extensionPath, 'out', 'real-proj');
-    const covIndex = findUnder(proj, 'coverage_report', true);
+    const laneCache = join(process.env.HOME ?? '', '.het-fti', 'managed-env', '.conan2', 'p');
+    const covIndex = findCovReportIndex(proj, [laneCache]);
     if (!covIndex) {
       const tail = (await vscode.commands.executeCommand<string>('het.getLastConanOutput')) ?? '';
-      console.log('[real] coverage missing — conan output tail:\n' + tail.slice(-4000));
+      console.log('[real] coverage missing — conan output tail:\n' + tail.slice(-12000));
     }
     assert.ok(covIndex, 'Linux lane coverage_report/index.html must exist after the real build');
     console.log('[real] coverage report: ' + covIndex);

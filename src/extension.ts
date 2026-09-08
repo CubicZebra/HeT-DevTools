@@ -885,7 +885,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         ? { passed: lastTestSummary.passed, failed: lastTestSummary.failed, skipped: lastTestSummary.skipped }
         : null,
     ),
-    vscode.commands.registerCommand('het.getLastConanOutput', () => lastConanOutput.slice(-4000)),
+    vscode.commands.registerCommand('het.getLastConanOutput', () => lastConanOutput.slice(-12000)),
   );
 
   // T-5.3: activation perf note + debounced metadata/conandata file watchers
