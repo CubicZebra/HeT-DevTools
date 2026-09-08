@@ -294,10 +294,18 @@ class PackageRecipe(ConanFile):
         self._validate_built_archives()
 
     def _validate_built_archives(self):
+        # The compat check reads ELF attributes via GNU readelf (`readelf -A`);
+        # it only applies to ELF toolchains (Linux native / WSL lane / gcc
+        # cross). On macOS (Mach-O, Apple clang) or Windows native there is no
+        # ELF readelf — skip gracefully instead of failing a successful build.
+        try:
+            readelf_path = self._find_binutil("readelf")
+        except RuntimeError:
+            self.output.info("[compat] 无 ELF readelf（macOS/Win 原生或未装 binutils）→ 跳过归档兼容校验")
+            return
         archive_names = [f"lib{self.name}_c.a", f"lib{self.name}_cpp.a"]
         build_dir = Path(self.build_folder)
 
-        readelf_path = self._find_binutil("readelf")
         ar_path = self._find_binutil("ar")
 
         reports = []
