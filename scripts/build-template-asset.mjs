@@ -11,6 +11,14 @@ const src = join(root, 'workspace', 'fcpp');
 const dest = join(root, 'assets', 'template');
 
 if (!existsSync(join(src, 'metadata.json'))) {
+  // workspace/fcpp is the maintainer's local reference copy (gitignored — the
+  // repo never commits it). On a fresh clone / CI the source is absent; the
+  // COMMITTED assets/template snapshot is then authoritative for packaging.
+  if (existsSync(join(dest, 'metadata.json'))) {
+    console.warn('[asset] workspace/fcpp 源缺失（CI/浅克隆）→ 沿用已提交的内置模板 assets/template。');
+    console.warn('[asset] 注意：本地改动 workspace/fcpp 后需运行 npm run asset 并提交 assets/template 以保持同步。');
+    process.exit(0);
+  }
   console.error(`[asset] template source missing: ${src}`);
   process.exit(1);
 }
